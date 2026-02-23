@@ -479,17 +479,19 @@ if st.session_state.raw_data is not None:
     analyte_name = st.session_state.current_analyte
     
     time_columns = [col for col in df.columns if "Time" in str(col) or "sec" in str(col).lower()]
+    # Ensure ALL variants of time columns (like 'Time [sec].1') are completely excluded from sensors
+    raw_sensor_columns = [col for col in df.columns if col not in time_columns]
     time_col = time_columns[0] if time_columns else df.columns[0]
     
-    # Clean X-axis explicitly into pure floats and throw away missing rows
-    df[time_col] = pd.to_numeric(df[time_col], errors='coerce')
+    # Safely convert to pure numbers to prevent Plotly from failing, handling commas natively
+    # We must operate safely to not destroy data if it's already well-formed
+    df[time_col] = pd.to_numeric(df[time_col].astype(str).str.replace(',', '.'), errors='coerce')
+    for c in raw_sensor_columns:
+        df[c] = pd.to_numeric(df[c].astype(str).str.replace(',', '.'), errors='coerce')
+        
+    # We drop purely empty time rows (like trailing Excel ghosts) but do NOT drop if it makes the whole array empty!
     df = df.dropna(subset=[time_col]).copy()
     
-    # Process remaining sensor columns: safely try parsing values as 0.0 or NaNs instead of string traces
-    raw_sensor_columns = [col for col in df.columns if col != time_col]
-    for c in raw_sensor_columns:
-        df[c] = pd.to_numeric(df[c], errors='coerce')
-        
     time_data_full = df[time_col].values - df[time_col].min()
     
     def format_sensor(name):
