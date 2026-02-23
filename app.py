@@ -266,6 +266,7 @@ if "settings_ma" not in st.session_state: st.session_state.settings_ma = {}
 if "intervals_dict" not in st.session_state: st.session_state.intervals_dict = {}
 if "temp_peaks" not in st.session_state: st.session_state.temp_peaks = []
 if "current_analyte" not in st.session_state: st.session_state.current_analyte = None
+if "last_sensor_key" not in st.session_state: st.session_state.last_sensor_key = None
 
 
 PLOT_CONFIG = {
@@ -711,6 +712,11 @@ if st.session_state.raw_data is not None:
             st.session_state.intervals_dict[dict_key] = []
         intervals = st.session_state.intervals_dict[dict_key]
         
+        # Auto-clear temp peaks when sensor selection changes
+        if st.session_state.last_sensor_key != dict_key:
+            st.session_state.temp_peaks = []
+            st.session_state.last_sensor_key = dict_key
+        
         with col_pf1:
             st.subheader("Peak Analytics Criteria")
             is_valley = st.checkbox("Valley Sensors (inverted peak target)?", value=False)
@@ -860,12 +866,31 @@ if st.session_state.raw_data is not None:
 
             st.write("**Live Local Regression Preview:**")
             try:
-                fig_preview_reg = px.scatter(preview_df, x="Conc", y="Signal", color="Sensor", trendline="ols", 
+                preview_df_ols = pd.DataFrame(st.session_state.temp_peaks)
+                fig_preview_reg = px.scatter(preview_df_ols, x="Conc", y="Signal", color="Sensor", trendline="ols",
                                              title="Real-Time Sensitivity Trend Lines (Unsaved)")
                 fig_preview_reg.update_layout(xaxis_title="Concentration Exposure (ppm)", yaxis_title="Mathematical Signal (Peak - Baseline)", height=400)
+                # Annotate with equation and R²
+                try:
+                    ols_results = px.get_trendline_results(fig_preview_reg)
+                    annotations = []
+                    for i, row in ols_results.iterrows():
+                        res = row["px_fit_results"]
+                        slope = res.params[1]
+                        intercept = res.params[0]
+                        r2 = res.rsquared
+                        sensor_label = row.get("Sensor", f"Sensor {i+1}")
+                        annotations.append(dict(
+                            xref="paper", yref="paper", x=0.01, y=0.97 - i * 0.08,
+                            text=f"<b>{sensor_label}:</b> y = {slope:.4f}x + {intercept:.4f} | R² = {r2:.4f}",
+                            showarrow=False, font=dict(size=11), align="left"
+                        ))
+                    fig_preview_reg.update_layout(annotations=annotations)
+                except Exception:
+                    pass
                 custom_plotly_chart(fig_preview_reg, use_container_width=True, theme=None, config=PLOT_CONFIG)
             except Exception as e:
-                st.warning(f"Live trendline preview failed (likely requires at least 2 concentration points per sensor): {e}")
+                st.warning(f"Live trendline preview failed (requires at least 2 concentration points per sensor): {e}")
     # ---------------- TAB 5: REGRESSION & DATABASE ----------------
     with tab_reg:
         st.header("Step 5: Database Regression & Trend Lines")
@@ -890,10 +915,27 @@ if st.session_state.raw_data is not None:
             if not db_sel.empty:
                 st.subheader("Interactive Local Sensitivities (Selected Pool)")
                 try: 
-                    # Use Plotly Express built-in Ordinary Least Squares
                     fig_reg = px.scatter(db_sel, x="Conc", y="Signal", color="Sensor", trendline="ols", 
                                         title=f"Scatter Trend Lines ({len(selected_sensors)} Local Active Sensors)")
                     fig_reg.update_layout(xaxis_title="Concentration Exposure (ppm)", yaxis_title="Mathematical Signal (Peak - Baseline)")
+                    # Annotate with equation and R²
+                    try:
+                        ols_db_results = px.get_trendline_results(fig_reg)
+                        db_annotations = []
+                        for i, row in ols_db_results.iterrows():
+                            res = row["px_fit_results"]
+                            slope = res.params[1]
+                            intercept = res.params[0]
+                            r2 = res.rsquared
+                            sensor_label = row.get("Sensor", f"Sensor {i+1}")
+                            db_annotations.append(dict(
+                                xref="paper", yref="paper", x=0.01, y=0.97 - i * 0.08,
+                                text=f"<b>{sensor_label}:</b> y = {slope:.4f}x + {intercept:.4f} | R² = {r2:.4f}",
+                                showarrow=False, font=dict(size=11), align="left"
+                            ))
+                        fig_reg.update_layout(annotations=db_annotations)
+                    except Exception:
+                        pass
                     custom_plotly_chart(fig_reg, use_container_width=True, theme=None, config=PLOT_CONFIG)
                 except Exception as e:
                     st.warning(f"Trendline failed (requires at least 2 points per sensor): {e}")
