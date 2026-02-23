@@ -510,9 +510,9 @@ if st.session_state.raw_data is not None:
     with st.sidebar.expander("Cloud Diagnostic Tool", expanded=True):
         st.write("DF Shape:", df.shape)
         st.write("Time Col:", time_col)
-        st.write("Time[0]:", df[time_col].values[0] if len(df)>0 else "Empty")
         st.write("First Sensor (PVA+CA):", df["PVA+CA"].dropna().values[0] if "PVA+CA" in df and len(df["PVA+CA"].dropna())>0 else "Empty")
         st.write("NaNs in Time:", df[time_col].isna().sum())
+        st.write("NaNs in PVA+CA:", df["PVA+CA"].isna().sum() if "PVA+CA" in df else "N/A")
     # -----------------------------------
     
     def format_sensor(name):
@@ -548,6 +548,8 @@ if st.session_state.raw_data is not None:
     tc = st.sidebar.number_input("Global Time Cutoff (sec)", min_value=0.0, value=0.0)
     valid_idx = time_data_full >= tc
     t_vals = time_data_full[valid_idx]
+    plot_stride = max(1, len(t_vals) // 1500)  # Cloud Optimization: Limit GUI points per line to ~1500 max
+    t_plot = t_vals[::plot_stride]
     
     # Pre-pipeline state dictionaries
     pipeline_raw = {s: df[s].values[valid_idx] for s in selected_sensors}
@@ -586,14 +588,14 @@ if st.session_state.raw_data is not None:
             st.markdown("**Processed Resistance (After)**")
             fig_res_after = plotly_go.Figure()
             for s in selected_sensors:
-                fig_res_after.add_trace(plotly_go.Scatter(x=t_vals, y=pipeline_res[s], name=f"{s}", line=dict(width=2)))
+                fig_res_after.add_trace(plotly_go.Scatter(x=t_plot, y=pipeline_res[s][::plot_stride], name=f"{s}", line=dict(width=2)))
             fig_res_after.update_layout(xaxis_title="Time (s)", yaxis_title="Calculated Resistance", height=350, margin=dict(l=0, r=0, t=10, b=0))
             custom_plotly_chart(fig_res_after, use_container_width=True, theme=None, config=PLOT_CONFIG)
             
             st.markdown("**Raw Voltage (Before)**")
             fig_res_before = plotly_go.Figure()
             for s in selected_sensors:
-                fig_res_before.add_trace(plotly_go.Scatter(x=t_vals, y=pipeline_raw[s], name=f"{s}", line=dict(dash='dot', width=1.5)))
+                fig_res_before.add_trace(plotly_go.Scatter(x=t_plot, y=pipeline_raw[s][::plot_stride], name=f"{s}", line=dict(dash='dot', width=1.5)))
             fig_res_before.update_layout(xaxis_title="Time (s)", yaxis_title="Raw Voltage", height=250, margin=dict(l=0, r=0, t=10, b=0))
             custom_plotly_chart(fig_res_before, use_container_width=True, theme=None, config=PLOT_CONFIG)
 
@@ -635,14 +637,14 @@ if st.session_state.raw_data is not None:
             st.markdown("**Smoothed Signal (After)**")
             fig_ma_after = plotly_go.Figure()
             for s in selected_sensors:
-                fig_ma_after.add_trace(plotly_go.Scatter(x=t_vals, y=pipeline_ma[s], name=f"{s}", line=dict(width=2)))
+                fig_ma_after.add_trace(plotly_go.Scatter(x=t_plot, y=pipeline_ma[s][::plot_stride], name=f"{s}", line=dict(width=2)))
             fig_ma_after.update_layout(xaxis_title="Time (s)", yaxis_title="Smoothed Response", height=350, margin=dict(l=0, r=0, t=10, b=0))
             custom_plotly_chart(fig_ma_after, use_container_width=True, theme=None, config=PLOT_CONFIG)
 
             st.markdown("**Unsmoothed Resistance (Before)**")
             fig_ma_before = plotly_go.Figure()
             for s in selected_sensors:
-                fig_ma_before.add_trace(plotly_go.Scatter(x=t_vals, y=pipeline_res[s], name=f"{s}", line=dict(dash='dot', width=1.5)))
+                fig_ma_before.add_trace(plotly_go.Scatter(x=t_plot, y=pipeline_res[s][::plot_stride], name=f"{s}", line=dict(dash='dot', width=1.5)))
             fig_ma_before.update_layout(xaxis_title="Time (s)", yaxis_title="Calculated Resistance", height=250, margin=dict(l=0, r=0, t=10, b=0))
             custom_plotly_chart(fig_ma_before, use_container_width=True, theme=None, config=PLOT_CONFIG)
 
@@ -672,14 +674,14 @@ if st.session_state.raw_data is not None:
             st.markdown("**Final Scaled Signal (After)**")
             fig_det_after = plotly_go.Figure()
             for s in selected_sensors:
-                fig_det_after.add_trace(plotly_go.Scatter(x=t_vals, y=pipeline_final[s], name=f"{s}", line=dict(width=2)))
+                fig_det_after.add_trace(plotly_go.Scatter(x=t_plot, y=pipeline_final[s][::plot_stride], name=f"{s}", line=dict(width=2)))
             fig_det_after.update_layout(xaxis_title="Time (s)", yaxis_title="Normalized Output", height=350, margin=dict(l=0, r=0, t=10, b=0))
             custom_plotly_chart(fig_det_after, use_container_width=True, theme=None, config=PLOT_CONFIG)
 
             st.markdown("**Pre-Normalization Signal (Before)**")
             fig_det_before = plotly_go.Figure()
             for s in selected_sensors:
-                fig_det_before.add_trace(plotly_go.Scatter(x=t_vals, y=pipeline_ma[s], name=f"{s}", line=dict(dash='dot', width=1.5)))
+                fig_det_before.add_trace(plotly_go.Scatter(x=t_plot, y=pipeline_ma[s][::plot_stride], name=f"{s}", line=dict(dash='dot', width=1.5)))
             fig_det_before.update_layout(xaxis_title="Time (s)", yaxis_title="Smoothed Response", height=250, margin=dict(l=0, r=0, t=10, b=0))
             custom_plotly_chart(fig_det_before, use_container_width=True, theme=None, config=PLOT_CONFIG)
 
@@ -752,7 +754,7 @@ if st.session_state.raw_data is not None:
             if len(st.session_state.temp_peaks) > 0:
                 # Ghost out inactive lines outside interval blocks
                 for s in selected_sensors:
-                    fig_p.add_trace(plotly_go.Scatter(x=t_vals, y=pipeline_final[s], mode='lines', line=dict(color='lightgray', width=1), showlegend=False))
+                    fig_p.add_trace(plotly_go.Scatter(x=t_plot, y=pipeline_final[s][::plot_stride], mode='lines', line=dict(color='lightgray', width=1), showlegend=False))
                 
                 # Draw colored overlay blocks
                 for i, inter in enumerate(intervals):
@@ -781,7 +783,7 @@ if st.session_state.raw_data is not None:
             else:
                 # Standard Explore mode
                 for s in selected_sensors:
-                    fig_p.add_trace(plotly_go.Scatter(x=t_vals, y=pipeline_final[s], mode='lines', line=dict(width=2), name=s))
+                    fig_p.add_trace(plotly_go.Scatter(x=t_plot, y=pipeline_final[s][::plot_stride], mode='lines', line=dict(width=2), name=s))
                 for i, inter in enumerate(intervals):
                     c_color = colors[i % len(colors)]
                     fig_p.add_vrect(x0=inter["Start"], x1=inter["End"], annotation_text=f"{inter.get('Conc')} ppm", annotation_position="top left", fillcolor=c_color, opacity=0.15, line_width=1, line_color=c_color)
