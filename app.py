@@ -796,7 +796,12 @@ if st.session_state.raw_data is not None:
             if np.isnan(s_max) or s_max <= s_min: s_max = s_min + 1.0
             s_min_val, s_max_val = s_min, s_max 
             
-            event = custom_plotly_chart(fig_p, use_container_width=True, on_select="rerun", selection_mode="box", config=PLOT_CONFIG, theme=None, key=f"plot_{dict_key}")
+            try:
+                event = custom_plotly_chart(fig_p, use_container_width=True, on_select="rerun", selection_mode="box", config=PLOT_CONFIG, theme=None, key=f"plot_{dict_key}")
+            except TypeError:
+                # on_select not supported in this Streamlit version — render without it
+                event = None
+                custom_plotly_chart(fig_p, use_container_width=True, config=PLOT_CONFIG, theme=None, key=f"plot_{dict_key}_noevent")
             
             try:
                 # Handle Streamlit <= 1.34 (dict-like) and >= 1.35 (object-like) events
