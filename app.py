@@ -490,9 +490,19 @@ if st.session_state.raw_data is not None:
     df = st.session_state.raw_data
     analyte_name = st.session_state.current_analyte
     
+    # Ensure complete numeric safety for Plotly JS, mitigating European comma strings 
+    for col in df.columns:
+        if df[col].dtype == 'object':
+            df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '.'), errors='coerce')
+        else:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
     time_columns = [col for col in df.columns if "Time" in str(col) or "sec" in str(col).lower()]
     raw_sensor_columns = [col for col in df.columns if col not in time_columns]
     time_col = time_columns[0]
+    
+    # Prune rows where time is physically unreadable
+    df = df.dropna(subset=[time_col]).copy()
     
     time_data_full = df[time_col].values - df[time_col].min()
     
