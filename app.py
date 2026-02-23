@@ -630,8 +630,12 @@ if st.session_state.raw_data is not None:
                 st.rerun()
             
         for s in selected_sensors:
-            settings = st.session_state.settings_ma.get(s, {"apply": True, "window": 10})
-            pipeline_ma[s] = preprocess_sensor(pipeline_res[s], window_size=settings["window"], apply_smoothing=settings["apply"])
+            if s == tune_sensor:
+                # Use live slider values so plot updates instantly on drag
+                pipeline_ma[s] = preprocess_sensor(pipeline_res[s], window_size=win_size, apply_smoothing=apply_smooth)
+            else:
+                settings = st.session_state.settings_ma.get(s, {"apply": True, "window": 10})
+                pipeline_ma[s] = preprocess_sensor(pipeline_res[s], window_size=settings["window"], apply_smoothing=settings["apply"])
 
         with c_m2:
             st.markdown("**Smoothed Signal (After)**")
