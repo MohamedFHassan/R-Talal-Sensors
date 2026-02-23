@@ -506,6 +506,15 @@ if st.session_state.raw_data is not None:
     
     time_data_full = df[time_col].values - df[time_col].min()
     
+    # --- TEMPORARY DIAGNOSTIC VIEWER ---
+    with st.sidebar.expander("Cloud Diagnostic Tool", expanded=True):
+        st.write("DF Shape:", df.shape)
+        st.write("Time Col:", time_col)
+        st.write("Time[0]:", df[time_col].values[0] if len(df)>0 else "Empty")
+        st.write("First Sensor (PVA+CA):", df["PVA+CA"].dropna().values[0] if "PVA+CA" in df and len(df["PVA+CA"].dropna())>0 else "Empty")
+        st.write("NaNs in Time:", df[time_col].isna().sum())
+    # -----------------------------------
+    
     def format_sensor(name):
         idx = POLYMER_MAPPING.get(name, "")
         return f"[{idx}] {name}" if idx else name
