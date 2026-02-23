@@ -764,12 +764,24 @@ if st.session_state.raw_data is not None:
             
             event = custom_plotly_chart(fig_p, use_container_width=True, on_select="rerun", selection_mode="box", config=PLOT_CONFIG, theme=None, key=f"plot_{dict_key}")
             
-            if event and "selection" in event and event["selection"].get("box"):
-                val = event["selection"]["box"][0].get("x")
-                if val and len(val) == 2:
-                    val_min, val_max = min(val[0], val[1]), max(val[0], val[1])
-                    if not np.isnan(val_min) and not np.isnan(val_max) and val_min < val_max:
-                        s_min_val, s_max_val = val_min, val_max
+            try:
+                # Handle Streamlit <= 1.34 (dict-like) and >= 1.35 (object-like) events
+                box_data = None
+                if isinstance(event, dict): 
+                    box_data = event.get("selection", {}).get("box")
+                elif hasattr(event, "selection"):
+                    sel = event.selection
+                    box_data = sel.get("box") if isinstance(sel, dict) else getattr(sel, "box", None)
+                
+                if box_data and len(box_data) > 0:
+                    box_item = box_data[0]
+                    val = box_item.get("x") if isinstance(box_item, dict) else getattr(box_item, "x", None)
+                    if val and len(val) == 2:
+                        val_min, val_max = min(val[0], val[1]), max(val[0], val[1])
+                        if not np.isnan(val_min) and not np.isnan(val_max) and val_min < val_max:
+                            s_min_val, s_max_val = val_min, val_max
+            except Exception:
+                pass
 
             cc1, cc2, cc3 = st.columns([1.5, 3, 1.5])
             with cc1: new_conc = st.number_input("Target Conc (ppm)", value=20, step=10, key="new_conc")
