@@ -478,9 +478,18 @@ if st.session_state.raw_data is not None:
     df = st.session_state.raw_data
     analyte_name = st.session_state.current_analyte
     
-    time_columns = [col for col in df.columns if "Time" in col or "sec" in col.lower()]
-    raw_sensor_columns = [col for col in df.columns if col not in time_columns]
-    time_col = time_columns[0]
+    time_columns = [col for col in df.columns if "Time" in str(col) or "sec" in str(col).lower()]
+    time_col = time_columns[0] if time_columns else df.columns[0]
+    
+    # Clean X-axis explicitly into pure floats and throw away missing rows
+    df[time_col] = pd.to_numeric(df[time_col], errors='coerce')
+    df = df.dropna(subset=[time_col]).copy()
+    
+    # Process remaining sensor columns: safely try parsing values as 0.0 or NaNs instead of string traces
+    raw_sensor_columns = [col for col in df.columns if col != time_col]
+    for c in raw_sensor_columns:
+        df[c] = pd.to_numeric(df[c], errors='coerce')
+        
     time_data_full = df[time_col].values - df[time_col].min()
     
     def format_sensor(name):
