@@ -422,8 +422,7 @@ def regression_analysis_grouped(data):
     return pd.DataFrame(regression_results), pd.DataFrame(point_contributions)
 
 
-# --- MAIN UI ---
-st.title("R Talal Sensors - Step-By-Step Pipeline")
+# --- MAIN UI --- (Title rendered after data is loaded)
 
 st.sidebar.header("🎨 Aesthetics")
 theme_choice = st.sidebar.selectbox("Dashboard Theme", ["Modern Clinical", "Neon Cyberpunk", "Dark Eco Forest"], index=["Modern Clinical", "Neon Cyberpunk", "Dark Eco Forest"].index(st.session_state.app_theme))
@@ -557,7 +556,7 @@ if st.session_state.raw_data is not None:
     pipeline_ma = {}
     pipeline_final = {}
 
-    st.title("R Talal Sensors - Neural Sensor Pipeline")
+    st.title("R Talal Sensors - Step-By-Step Pipeline")
     st.markdown("Welcome to the advanced chemical sensor processing suite. Process raw environmental data into clean mathematical insights by following the steps left-to-right.")
     
     tab_res, tab_ma, tab_det, tab_peak, tab_reg, tab_pca = st.tabs([
