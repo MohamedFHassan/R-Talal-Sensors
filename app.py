@@ -625,8 +625,10 @@ if st.session_state.raw_data is not None:
                 
             st.markdown("---")
             if st.button("Apply Current Window to ALL Active Sensors"):
-                for s in selected_sensors:
+                # Apply to every sensor in the dataset, not just current view
+                for s in raw_sensor_columns:
                     st.session_state.settings_ma[s] = {"apply": apply_smooth, "window": win_size}
+                st.success(f"Window {win_size} applied to all {len(raw_sensor_columns)} sensors.")
                 st.rerun()
             
         for s in selected_sensors:
