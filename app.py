@@ -486,17 +486,18 @@ if uploaded_file:
     except Exception as e:
         st.sidebar.error(f"Error loading file: {e}")
 
-# --- SESSION RESTORE ---
-st.sidebar.markdown("---")
-st.sidebar.header("💾 Restore Session")
-db_import_file = st.sidebar.file_uploader("Import Peak Database (.xlsx)", type=['xlsx'], key="db_import")
-if db_import_file:
-    try:
-        imported_db = pd.read_excel(db_import_file, sheet_name="Peak Database")
-        st.session_state.master_peaks = imported_db
-        st.sidebar.success(f"✅ Restored {len(imported_db)} peak entries from saved session!")
-    except Exception as e:
-        st.sidebar.error(f"Import failed: {e}")
+# --- SESSION RESTORE shown only after main data is loaded to avoid dual-uploader 400 conflict ---
+if st.session_state.raw_data is not None:
+    st.sidebar.markdown("---")
+    st.sidebar.header("💾 Restore Session")
+    db_import_file = st.sidebar.file_uploader("Import Peak Database (.xlsx)", type=['xlsx'], key="db_import")
+    if db_import_file:
+        try:
+            imported_db = pd.read_excel(db_import_file, sheet_name="Peak Database")
+            st.session_state.master_peaks = imported_db
+            st.sidebar.success(f"✅ Restored {len(imported_db)} peak entries!")
+        except Exception as e:
+            st.sidebar.error(f"Import failed: {e}")
 
 if st.session_state.raw_data is not None:
     df = st.session_state.raw_data
