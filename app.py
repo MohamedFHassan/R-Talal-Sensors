@@ -509,7 +509,8 @@ if st.session_state.raw_data is not None:
             if "MA Settings" in xl.sheet_names:
                 ma_df = pd.read_excel(xl, sheet_name="MA Settings")
                 for _, row in ma_df.iterrows():
-                    st.session_state.settings_ma[row["Sensor"]] = {"apply": bool(row["Apply"]), "window": int(row["Window"])}
+                    analyte_prefix = str(row.get("Analyte", analyte_name)) if st.session_state.raw_data is not None else str(row.get("Analyte", ""))
+                    st.session_state.settings_ma[f"{analyte_prefix}::{row['Sensor']}"] = {"apply": bool(row["Apply"]), "window": int(row["Window"])}
             # 4. Pre-populate temp_peaks for the current view from restored DB (so peak chart re-renders)
             st.session_state.temp_peaks = imported_db.to_dict('records')
             st.sidebar.success(f"✅ Restored {len(imported_db)} peaks + intervals + MA settings!")
@@ -519,6 +520,9 @@ if st.session_state.raw_data is not None:
 if st.session_state.raw_data is not None:
     df = st.session_state.raw_data
     analyte_name = st.session_state.current_analyte
+
+    # Namespace helper: MA settings are per-analyte so different sheets don't bleed into each other
+    def ma_key(sensor): return f"{analyte_name}::{sensor}"
     
     # Ensure complete numeric safety for Plotly JS, mitigating European comma strings 
     for col in df.columns:
@@ -657,19 +661,19 @@ if st.session_state.raw_data is not None:
         with c_m1:
             tune_sensor = st.selectbox("Select Sensor to Configure Moving Average", selected_sensors)
             
-            current_settings = st.session_state.settings_ma.get(tune_sensor, {"apply": True, "window": 10})
+            current_settings = st.session_state.settings_ma.get(ma_key(tune_sensor), {"apply": True, "window": 10})
             apply_smooth = st.checkbox(f"Enable Smoothing for {tune_sensor}", value=current_settings["apply"])
             win_size = st.slider(f"Window Size for {tune_sensor}", 1, 500, current_settings["window"]) if apply_smooth else 1
             
             if st.button(f"Save Settings for {tune_sensor}", type="primary"):
-                st.session_state.settings_ma[tune_sensor] = {"apply": apply_smooth, "window": win_size}
+                st.session_state.settings_ma[ma_key(tune_sensor)] = {"apply": apply_smooth, "window": win_size}
                 st.rerun()
                 
             st.markdown("---")
             if st.button("Apply Current Window to ALL Active Sensors"):
                 # Apply to every sensor in the dataset, not just current view
                 for s in raw_sensor_columns:
-                    st.session_state.settings_ma[s] = {"apply": apply_smooth, "window": win_size}
+                    st.session_state.settings_ma[ma_key(s)] = {"apply": apply_smooth, "window": win_size}
                 st.success(f"Window {win_size} applied to all {len(raw_sensor_columns)} sensors.")
                 st.rerun()
             
@@ -678,7 +682,7 @@ if st.session_state.raw_data is not None:
                 # Use live slider values so plot updates instantly on drag
                 pipeline_ma[s] = preprocess_sensor(pipeline_res[s], window_size=win_size, apply_smoothing=apply_smooth)
             else:
-                settings = st.session_state.settings_ma.get(s, {"apply": True, "window": 10})
+                settings = st.session_state.settings_ma.get(ma_key(s), {"apply": True, "window": 10})
                 pipeline_ma[s] = preprocess_sensor(pipeline_res[s], window_size=settings["window"], apply_smoothing=settings["apply"])
 
         with c_m2:
@@ -703,7 +707,7 @@ if st.session_state.raw_data is not None:
                 with pd.ExcelWriter(ma_buf, engine='xlsxwriter') as writer:
                     ma_export = pd.DataFrame({'Time (s)': t_vals})
                     for s in raw_sensor_columns:
-                        sett = st.session_state.settings_ma.get(s, {"apply": True, "window": 10})
+                        sett = st.session_state.settings_ma.get(ma_key(s), {"apply": True, "window": 10})
                         ma_export[s] = preprocess_sensor(df[s].values[valid_idx], window_size=sett['window'], apply_smoothing=sett['apply'])
                     ma_export.to_excel(writer, sheet_name='Smoothed Data', index=False)
                 st.download_button("Download Smoothed Excel", data=ma_buf.getvalue(), file_name=f"Smoothed_{analyte_name}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -752,7 +756,7 @@ if st.session_state.raw_data is not None:
                 with pd.ExcelWriter(det_buf, engine='xlsxwriter') as writer:
                     det_export = pd.DataFrame({'Time (s)': t_vals})
                     for s in raw_sensor_columns:
-                        sett = st.session_state.settings_ma.get(s, {"apply": True, "window": 10})
+                        sett = st.session_state.settings_ma.get(ma_key(s), {"apply": True, "window": 10})
                         y_m = preprocess_sensor(df[s].values[valid_idx], window_size=sett['window'], apply_smoothing=sett['apply'])
                         y_d = detrend_sensor(y_m, apply_detrend=apply_detrend)
                         det_export[s] = normalize_sensor(y_d, norm=norm_sel)
@@ -1025,8 +1029,8 @@ if st.session_state.raw_data is not None:
                             rows.append({"dict_key": key, "Conc": iv["Conc"], "Start": iv["Start"], "End": iv["End"]})
                     if rows: pd.DataFrame(rows).to_excel(writer, sheet_name='Intervals', index=False)
                     # Save MA settings
-                    ma_rows = [{"Sensor": s, "Apply": v["apply"], "Window": v["window"]} 
-                               for s, v in st.session_state.settings_ma.items()]
+                    ma_rows = [{"Analyte": analyte_name, "Sensor": s.split("::",1)[-1], "Apply": v["apply"], "Window": v["window"]} 
+                               for s, v in st.session_state.settings_ma.items() if s.startswith(f"{analyte_name}::")]
                     if ma_rows: pd.DataFrame(ma_rows).to_excel(writer, sheet_name='MA Settings', index=False)
                 st.download_button(
                     label="📤 Export Full Session",
