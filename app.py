@@ -493,9 +493,26 @@ if st.session_state.raw_data is not None:
     db_import_file = st.sidebar.file_uploader("Import Peak Database (.xlsx)", type=['xlsx'], key="db_import")
     if db_import_file:
         try:
-            imported_db = pd.read_excel(db_import_file, sheet_name="Peak Database")
+            xl = pd.ExcelFile(db_import_file)
+            # 1. Restore peak database
+            imported_db = pd.read_excel(xl, sheet_name="Peak Database")
             st.session_state.master_peaks = imported_db
-            st.sidebar.success(f"✅ Restored {len(imported_db)} peak entries!")
+            # 2. Restore concentration intervals per sensor group
+            if "Intervals" in xl.sheet_names:
+                int_df = pd.read_excel(xl, sheet_name="Intervals")
+                for _, row in int_df.iterrows():
+                    key = str(row["dict_key"])
+                    if key not in st.session_state.intervals_dict:
+                        st.session_state.intervals_dict[key] = []
+                    st.session_state.intervals_dict[key].append({"Conc": row["Conc"], "Start": row["Start"], "End": row["End"]})
+            # 3. Restore MA settings per sensor
+            if "MA Settings" in xl.sheet_names:
+                ma_df = pd.read_excel(xl, sheet_name="MA Settings")
+                for _, row in ma_df.iterrows():
+                    st.session_state.settings_ma[row["Sensor"]] = {"apply": bool(row["Apply"]), "window": int(row["Window"])}
+            # 4. Pre-populate temp_peaks for the current view from restored DB (so peak chart re-renders)
+            st.session_state.temp_peaks = imported_db.to_dict('records')
+            st.sidebar.success(f"✅ Restored {len(imported_db)} peaks + intervals + MA settings!")
         except Exception as e:
             st.sidebar.error(f"Import failed: {e}")
 
@@ -612,6 +629,18 @@ if st.session_state.raw_data is not None:
             fig_res_before.update_layout(xaxis_title="Time (s)", yaxis_title="Raw Voltage", height=250, margin=dict(l=0, r=0, t=10, b=0))
             custom_plotly_chart(fig_res_before, use_container_width=True, theme=None, config=PLOT_CONFIG)
 
+            # --- TAB 1 EXPORT ---
+            st.markdown("---")
+            if st.button("📥 Export Resistance Data (All Sensors) to Excel", key="export_res"):
+                res_buf = io.BytesIO()
+                with pd.ExcelWriter(res_buf, engine='xlsxwriter') as writer:
+                    res_export = pd.DataFrame({'Time (s)': t_vals})
+                    for s in raw_sensor_columns:
+                        raw_col = df[s].values[valid_idx]
+                        res_export[s] = raw_col / 0.003 if div_by_003 else raw_col
+                    res_export.to_excel(writer, sheet_name='Resistance Data', index=False)
+                st.download_button("Download Resistance Excel", data=res_buf.getvalue(), file_name=f"Resistance_{analyte_name}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
     # ---------------- TAB 2: MOVING AVERAGE ----------------
     with tab_ma:
         st.header("Step 2: Moving Average Smoothing")
@@ -667,6 +696,18 @@ if st.session_state.raw_data is not None:
             fig_ma_before.update_layout(xaxis_title="Time (s)", yaxis_title="Calculated Resistance", height=250, margin=dict(l=0, r=0, t=10, b=0))
             custom_plotly_chart(fig_ma_before, use_container_width=True, theme=None, config=PLOT_CONFIG)
 
+            # --- TAB 2 EXPORT ---
+            st.markdown("---")
+            if st.button("📥 Export Smoothed Data (All Sensors) to Excel", key="export_ma"):
+                ma_buf = io.BytesIO()
+                with pd.ExcelWriter(ma_buf, engine='xlsxwriter') as writer:
+                    ma_export = pd.DataFrame({'Time (s)': t_vals})
+                    for s in raw_sensor_columns:
+                        sett = st.session_state.settings_ma.get(s, {"apply": True, "window": 10})
+                        ma_export[s] = preprocess_sensor(df[s].values[valid_idx], window_size=sett['window'], apply_smoothing=sett['apply'])
+                    ma_export.to_excel(writer, sheet_name='Smoothed Data', index=False)
+                st.download_button("Download Smoothed Excel", data=ma_buf.getvalue(), file_name=f"Smoothed_{analyte_name}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
     # ---------------- TAB 3: DETRENDING & NORMALIZATION ----------------
     with tab_det:
         st.header("Step 3: Detrending & Signal Normalization")
@@ -703,6 +744,20 @@ if st.session_state.raw_data is not None:
                 fig_det_before.add_trace(plotly_go.Scatter(x=t_plot, y=pipeline_ma[s][::plot_stride], name=f"{s}", line=dict(dash='dot', width=1.5)))
             fig_det_before.update_layout(xaxis_title="Time (s)", yaxis_title="Smoothed Response", height=250, margin=dict(l=0, r=0, t=10, b=0))
             custom_plotly_chart(fig_det_before, use_container_width=True, theme=None, config=PLOT_CONFIG)
+
+            # --- TAB 3 EXPORT ---
+            st.markdown("---")
+            if st.button("📥 Export Normalized Data (All Sensors) to Excel", key="export_det"):
+                det_buf = io.BytesIO()
+                with pd.ExcelWriter(det_buf, engine='xlsxwriter') as writer:
+                    det_export = pd.DataFrame({'Time (s)': t_vals})
+                    for s in raw_sensor_columns:
+                        sett = st.session_state.settings_ma.get(s, {"apply": True, "window": 10})
+                        y_m = preprocess_sensor(df[s].values[valid_idx], window_size=sett['window'], apply_smoothing=sett['apply'])
+                        y_d = detrend_sensor(y_m, apply_detrend=apply_detrend)
+                        det_export[s] = normalize_sensor(y_d, norm=norm_sel)
+                    det_export.to_excel(writer, sheet_name='Normalized Data', index=False)
+                st.download_button("Download Normalized Excel", data=det_buf.getvalue(), file_name=f"Normalized_{analyte_name}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
     # ---------------- TAB 4: PEAK FINDER ----------------
     with tab_peak:
@@ -959,14 +1014,24 @@ if st.session_state.raw_data is not None:
             c_g1, c_g2, c_g3 = st.columns([3, 1.3, 1.3])
             with c_g1: st.subheader("Global Process Database")
             with c_g2:
-                # Export full database (including internal tL/tR/yL/yR for reimport)
+                # Export full session: DB + Intervals + MA Settings
                 export_buf = io.BytesIO()
                 with pd.ExcelWriter(export_buf, engine='xlsxwriter') as writer:
                     db.to_excel(writer, sheet_name='Peak Database', index=False)
+                    # Save intervals for all sensor groups
+                    rows = []
+                    for key, ints in st.session_state.intervals_dict.items():
+                        for iv in ints:
+                            rows.append({"dict_key": key, "Conc": iv["Conc"], "Start": iv["Start"], "End": iv["End"]})
+                    if rows: pd.DataFrame(rows).to_excel(writer, sheet_name='Intervals', index=False)
+                    # Save MA settings
+                    ma_rows = [{"Sensor": s, "Apply": v["apply"], "Window": v["window"]} 
+                               for s, v in st.session_state.settings_ma.items()]
+                    if ma_rows: pd.DataFrame(ma_rows).to_excel(writer, sheet_name='MA Settings', index=False)
                 st.download_button(
-                    label="📤 Export DB",
+                    label="📤 Export Full Session",
                     data=export_buf.getvalue(),
-                    file_name=f"R_Talal_PeakDB_{st.session_state.current_analyte}.xlsx",
+                    file_name=f"R_Talal_Session_{st.session_state.current_analyte}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True
                 )
