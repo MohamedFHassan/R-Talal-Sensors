@@ -486,6 +486,18 @@ if uploaded_file:
     except Exception as e:
         st.sidebar.error(f"Error loading file: {e}")
 
+# --- SESSION RESTORE ---
+st.sidebar.markdown("---")
+st.sidebar.header("💾 Restore Session")
+db_import_file = st.sidebar.file_uploader("Import Peak Database (.xlsx)", type=['xlsx'], key="db_import")
+if db_import_file:
+    try:
+        imported_db = pd.read_excel(db_import_file, sheet_name="Peak Database")
+        st.session_state.master_peaks = imported_db
+        st.sidebar.success(f"✅ Restored {len(imported_db)} peak entries from saved session!")
+    except Exception as e:
+        st.sidebar.error(f"Import failed: {e}")
+
 if st.session_state.raw_data is not None:
     df = st.session_state.raw_data
     analyte_name = st.session_state.current_analyte
@@ -943,10 +955,22 @@ if st.session_state.raw_data is not None:
                     st.warning(f"Trendline failed (requires at least 2 points per sensor): {e}")
 
             st.markdown("---")
-            c_g1, c_g2 = st.columns([4, 1])
+            c_g1, c_g2, c_g3 = st.columns([3, 1.3, 1.3])
             with c_g1: st.subheader("Global Process Database")
-            with c_g2: 
-                if st.button("⚠️ Clear Entire Database", type="secondary"): 
+            with c_g2:
+                # Export full database (including internal tL/tR/yL/yR for reimport)
+                export_buf = io.BytesIO()
+                with pd.ExcelWriter(export_buf, engine='xlsxwriter') as writer:
+                    db.to_excel(writer, sheet_name='Peak Database', index=False)
+                st.download_button(
+                    label="📤 Export DB",
+                    data=export_buf.getvalue(),
+                    file_name=f"R_Talal_PeakDB_{st.session_state.current_analyte}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            with c_g3:
+                if st.button("⚠️ Clear DB", type="secondary", use_container_width=True): 
                     st.session_state.master_peaks = pd.DataFrame()
                     st.rerun()
             
