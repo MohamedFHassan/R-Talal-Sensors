@@ -420,7 +420,11 @@ def regression_analysis_grouped(data):
             'R2': baseline_r2,
             'Std_Error': np.std(model_full.resid, ddof=1) if len(model_full.resid) > 1 else np.nan,
             'Slope': model_full.params.get("Conc", np.nan),
-            'Intercept': model_full.params.get('const', np.nan)
+            'Intercept': model_full.params.get('const', np.nan),
+            'LOD (ppm)': 3 * np.std(model_full.resid, ddof=1) / model_full.params.get("Conc", np.nan) if len(model_full.resid) > 1 and model_full.params.get("Conc", np.nan) != 0 else np.nan,
+            'Avg Response Time (s)': group['Response Time (s)'].mean() if 'Response Time (s)' in group else np.nan,
+            'Avg Recovery Time (s)': group['Recovery Time (s)'].mean() if 'Recovery Time (s)' in group else np.nan,
+            'Reproducibility RSD (%)': (np.std(model_full.resid, ddof=1) / group['Signal'].mean() * 100) if group['Signal'].mean() != 0 and len(model_full.resid) > 1 else np.nan
         })
     return pd.DataFrame(regression_results), pd.DataFrame(point_contributions)
 
