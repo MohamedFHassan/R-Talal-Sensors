@@ -7,6 +7,7 @@ from scipy.signal import detrend, find_peaks
 import statsmodels.api as sm
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
 from sklearn.decomposition import PCA
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 import io
 import plotly.io as pio
 # --- Page Config & State ---
@@ -610,8 +611,8 @@ if st.session_state.raw_data is not None:
     st.title("R Talal Sensors - Step-By-Step Pipeline")
     st.markdown("Welcome to the advanced chemical sensor processing suite. Process raw environmental data into clean mathematical insights by following the steps left-to-right.")
     
-    tab_res, tab_ma, tab_det, tab_peak, tab_reg, tab_pca = st.tabs([
-        "⚙️ 1. Resistance", "〰️ 2. Moving Average", "🧹 3. Detrend & Norm", "🔎 4. Peak Finder", "📈 5. Local/Global Regression", "🧠 6. PCA Analysis"
+    tab_res, tab_ma, tab_det, tab_peak, tab_reg, tab_pca, tab_lda = st.tabs([
+        "⚙️ 1. Resistance", "〰️ 2. Moving Average", "🧹 3. Detrend & Norm", "🔎 4. Peak Finder", "📈 5. Local/Global Regression", "🧠 6. PCA Analysis", "🔬 7. LDA Analysis"
     ])
 
     # ---------------- TAB 1: RESISTANCE ----------------
@@ -1186,7 +1187,227 @@ if st.session_state.raw_data is not None:
                     st.write(f"- PC2 captures **{var_ratio[1]:.2f}%** of total variance")
                     st.write(f"- Total: **{(var_ratio[0] + var_ratio[1]):.2f}%**")
                     
-                    st.write("**Component Matrix Loadings:**")
+                     st.write("**Component Matrix Loadings:**")
                     loadings = pd.DataFrame(pca.components_.T, columns=['PC1', 'PC2'], index=features)
                     st.dataframe(loadings, use_container_width=True)
                     st.download_button("📥 Export Matrix Loadings", data=convert_df(loadings), file_name="pca_loadings.csv", mime="text/csv")
+
+    # ---------------- TAB 7: LDA ANALYSIS ----------------
+    with tab_lda:
+        st.header("Step 7: Linear Discriminant Analysis (LDA)")
+        with st.expander("📚 Educational Walkthrough: How does LDA differ from PCA?", expanded=True):
+            st.info('''
+            **The Key Difference from PCA:**  
+            PCA is *unsupervised* — it finds directions of maximum variance regardless of class labels. **LDA is *supervised*** — it already knows the class labels (Analyte name or Polymer type) and finds the projection axes that **maximally separate the known classes** from each other.
+            
+            **LDA for Analytes:**  
+            Uses the sensor array signals as features and the **gas identity (Analyte)** as the class. The result shows how cleanly the sensor array can distinguish between, e.g., Acetone vs Ethanol vs Toluene.
+            
+            **LDA for Polymers:**  
+            Transposes the view — uses concentration responses as features and the **polymer sensor identity** as the class. The result reveals which polymers have chemically distinct response profiles and which ones overlap (and are therefore redundant).
+            
+            **The Math:**  
+            LDA computes *Linear Discriminants (LD1, LD2)* — the axes that simultaneously minimise within-class scatter and maximise between-class scatter. The ratio of explained variance per discriminant is also shown.
+            ''')
+
+        db_lda = st.session_state.master_peaks
+        if db_lda.empty:
+            st.info("The peak database is empty. Detect and save peaks in Step 4 first.")
+        else:
+            lda_sub_analyte, lda_sub_polymer = st.tabs(["🧪 LDA — Analyte Clusters", "🧬 LDA — Polymer Clusters"])
+
+            # ── Shared filter controls ──────────────────────────────────────────
+            avail_sensors_lda = sorted(db_lda["Sensor"].unique())
+            avail_concs_lda   = sorted(db_lda["Conc"].dropna().unique())
+
+            # ════════════════════════════════════════════════════════════════════
+            # SUB-TAB A: LDA — Analyte Clusters
+            # Feature matrix: rows = (Analyte, Conc), columns = Sensors (same pivot as PCA)
+            # Class label: Analyte
+            # ════════════════════════════════════════════════════════════════════
+            with lda_sub_analyte:
+                st.subheader("LDA: Analyte Discrimination via Sensor Array")
+                st.markdown("Each **dot** is one (Analyte × Concentration) sample. LDA finds the axes that best separate the gas identities.")
+
+                c_la1, c_la2 = st.columns(2)
+                with c_la1:
+                    lda_a_sensors = st.multiselect("Features (Sensors)", avail_sensors_lda, default=avail_sensors_lda, key="lda_a_sensors")
+                    lda_a_drop_na = st.checkbox("Strict: Drop rows with missing signals", value=True, key="lda_a_drop_na")
+                with c_la2:
+                    lda_a_concs = st.multiselect("Include Concentrations", avail_concs_lda, default=avail_concs_lda, key="lda_a_concs")
+
+                if len(lda_a_sensors) < 2:
+                    st.warning("LDA requires at least 2 sensor features.")
+                elif len(lda_a_concs) < 1:
+                    st.warning("Select at least 1 concentration.")
+                else:
+                    lda_a_df = db_lda[(db_lda["Sensor"].isin(lda_a_sensors)) & (db_lda["Conc"].isin(lda_a_concs))].copy()
+                    lda_a_pivot = lda_a_df.pivot_table(index=["Analyte", "Conc"], columns="Sensor", values="Signal", aggfunc="mean").reset_index()
+                    lda_a_clean = lda_a_pivot.dropna() if lda_a_drop_na else lda_a_pivot.fillna(0)
+
+                    analyte_classes = lda_a_clean["Analyte"].values
+                    n_classes_a = len(np.unique(analyte_classes))
+                    features_a = [c for c in lda_a_clean.columns if c not in ["Analyte", "Conc"]]
+                    X_a = lda_a_clean[features_a].values
+
+                    if len(lda_a_clean) < n_classes_a + 1:
+                        st.warning(f"Not enough samples ({len(lda_a_clean)}) for {n_classes_a} classes. Need at least {n_classes_a + 1} rows.")
+                    elif n_classes_a < 2:
+                        st.warning("LDA requires at least 2 distinct analyte classes. Add data from more analytes.")
+                    else:
+                        try:
+                            X_a_scaled = StandardScaler().fit_transform(X_a)
+                            n_components_a = min(n_classes_a - 1, len(features_a), 2)
+                            lda_a = LinearDiscriminantAnalysis(n_components=n_components_a)
+                            ld_a = lda_a.fit_transform(X_a_scaled, analyte_classes)
+
+                            lda_a_out = lda_a_clean[["Analyte", "Conc"]].copy().reset_index(drop=True)
+                            lda_a_out["LD1"] = ld_a[:, 0]
+                            lda_a_out["LD2"] = ld_a[:, 1] if n_components_a >= 2 else 0.0
+
+                            expl_var_a = lda_a.explained_variance_ratio_ * 100
+                            ld1_label_a = f"LD1 ({expl_var_a[0]:.1f}%)" if len(expl_var_a) >= 1 else "LD1"
+                            ld2_label_a = f"LD2 ({expl_var_a[1]:.1f}%)" if len(expl_var_a) >= 2 else "LD2 (collapsed)"
+
+                            fig_lda_a = px.scatter(
+                                lda_a_out, x="LD1", y="LD2", color="Analyte", text="Conc",
+                                title="LDA Cluster Map — Analyte Separation (Sensors as Features)",
+                                labels={"LD1": ld1_label_a, "LD2": ld2_label_a},
+                                height=520
+                            )
+                            fig_lda_a.update_traces(textposition="top center", marker=dict(size=11, line=dict(width=1, color="white")))
+
+                            # Draw class centroids
+                            for analyte_label in lda_a_out["Analyte"].unique():
+                                sub = lda_a_out[lda_a_out["Analyte"] == analyte_label]
+                                cx, cy = sub["LD1"].mean(), sub["LD2"].mean()
+                                fig_lda_a.add_trace(plotly_go.Scatter(
+                                    x=[cx], y=[cy], mode="markers+text",
+                                    marker=dict(symbol="x", size=16, color="black", line=dict(width=2)),
+                                    text=[f"⊕ {analyte_label}"], textposition="bottom center",
+                                    textfont=dict(size=11, color="black"),
+                                    showlegend=False, name=f"Centroid: {analyte_label}"
+                                ))
+
+                            custom_plotly_chart(fig_lda_a, use_container_width=True, theme=None, config=PLOT_CONFIG)
+
+                            st.markdown("---")
+                            c_lda_a1, c_lda_a2 = st.columns([2, 1])
+                            with c_lda_a1:
+                                st.write("**LDA Projection Matrix:**")
+                                st.dataframe(lda_a_out, use_container_width=True)
+                                st.download_button("📥 Export LDA-Analyte Matrix", data=convert_df(lda_a_out), file_name="lda_analyte.csv", mime="text/csv")
+                            with c_lda_a2:
+                                st.write("**Explained Discrimination:**")
+                                for i, ev in enumerate(expl_var_a):
+                                    st.write(f"- LD{i+1} captures **{ev:.2f}%**")
+                                st.write(f"- Total: **{sum(expl_var_a):.2f}%**")
+                                st.markdown("---")
+                                st.write("**Discriminant Coefficients (LD1):**")
+                                coef_df_a = pd.DataFrame({"Sensor": features_a, "LD1 Coeff": lda_a.coef_[0]})
+                                if lda_a.coef_.shape[0] > 1:
+                                    coef_df_a["LD2 Coeff"] = lda_a.coef_[1]
+                                coef_df_a = coef_df_a.sort_values("LD1 Coeff", key=abs, ascending=False)
+                                st.dataframe(coef_df_a, use_container_width=True)
+                                st.download_button("📥 Export Coefficients", data=convert_df(coef_df_a), file_name="lda_analyte_coeff.csv", mime="text/csv")
+                        except Exception as e:
+                            st.error(f"LDA (Analyte) failed: {e}")
+
+            # ════════════════════════════════════════════════════════════════════
+            # SUB-TAB B: LDA — Polymer Clusters
+            # Feature matrix: rows = (Sensor, Analyte), columns = Conc levels
+            # Class label: Sensor (polymer)
+            # ════════════════════════════════════════════════════════════════════
+            with lda_sub_polymer:
+                st.subheader("LDA: Polymer Discrimination via Concentration Response Profile")
+                st.markdown("Each **dot** is one (Polymer × Analyte) sample. LDA finds the axes that best separate polymer types based on how they respond across concentrations.")
+
+                c_lp1, c_lp2 = st.columns(2)
+                with c_lp1:
+                    lda_p_sensors = st.multiselect("Include Polymers (Sensors)", avail_sensors_lda, default=avail_sensors_lda, key="lda_p_sensors")
+                    lda_p_drop_na = st.checkbox("Strict: Drop rows with missing signals", value=True, key="lda_p_drop_na")
+                with c_lp2:
+                    lda_p_concs = st.multiselect("Include Concentrations (Features)", avail_concs_lda, default=avail_concs_lda, key="lda_p_concs")
+                    lda_p_color_by = st.radio("Color points by", ["Sensor (Polymer)", "Analyte"], key="lda_p_color_by", horizontal=True)
+
+                if len(lda_p_sensors) < 2:
+                    st.warning("Select at least 2 polymers.")
+                elif len(lda_p_concs) < 2:
+                    st.warning("LDA for polymers requires at least 2 concentration levels as features.")
+                else:
+                    lda_p_df = db_lda[(db_lda["Sensor"].isin(lda_p_sensors)) & (db_lda["Conc"].isin(lda_p_concs))].copy()
+                    # Pivot: rows = (Sensor, Analyte), columns = Conc levels
+                    lda_p_pivot = lda_p_df.pivot_table(index=["Sensor", "Analyte"], columns="Conc", values="Signal", aggfunc="mean").reset_index()
+                    lda_p_pivot.columns = [str(c) for c in lda_p_pivot.columns]
+                    conc_feature_cols = [str(c) for c in lda_p_concs if str(c) in lda_p_pivot.columns]
+                    lda_p_clean = lda_p_pivot.dropna(subset=conc_feature_cols) if lda_p_drop_na else lda_p_pivot.fillna(0)
+
+                    polymer_classes = lda_p_clean["Sensor"].values
+                    n_classes_p = len(np.unique(polymer_classes))
+                    X_p = lda_p_clean[conc_feature_cols].values
+
+                    if len(lda_p_clean) < n_classes_p + 1:
+                        st.warning(f"Not enough samples ({len(lda_p_clean)}) for {n_classes_p} polymer classes. Need at least {n_classes_p + 1} rows.")
+                    elif n_classes_p < 2:
+                        st.warning("LDA requires at least 2 distinct polymer types.")
+                    else:
+                        try:
+                            X_p_scaled = StandardScaler().fit_transform(X_p)
+                            n_components_p = min(n_classes_p - 1, len(conc_feature_cols), 2)
+                            lda_p = LinearDiscriminantAnalysis(n_components=n_components_p)
+                            ld_p = lda_p.fit_transform(X_p_scaled, polymer_classes)
+
+                            lda_p_out = lda_p_clean[["Sensor", "Analyte"]].copy().reset_index(drop=True)
+                            lda_p_out["LD1"] = ld_p[:, 0]
+                            lda_p_out["LD2"] = ld_p[:, 1] if n_components_p >= 2 else 0.0
+
+                            expl_var_p = lda_p.explained_variance_ratio_ * 100
+                            ld1_label_p = f"LD1 ({expl_var_p[0]:.1f}%)" if len(expl_var_p) >= 1 else "LD1"
+                            ld2_label_p = f"LD2 ({expl_var_p[1]:.1f}%)" if len(expl_var_p) >= 2 else "LD2 (collapsed)"
+
+                            color_col = "Sensor" if lda_p_color_by == "Sensor (Polymer)" else "Analyte"
+                            fig_lda_p = px.scatter(
+                                lda_p_out, x="LD1", y="LD2", color=color_col,
+                                symbol="Analyte" if color_col == "Sensor" else "Sensor",
+                                text="Sensor",
+                                title="LDA Cluster Map — Polymer Discrimination (Concentration Levels as Features)",
+                                labels={"LD1": ld1_label_p, "LD2": ld2_label_p},
+                                height=520
+                            )
+                            fig_lda_p.update_traces(textposition="top center", marker=dict(size=11, line=dict(width=1, color="white")))
+
+                            # Draw class centroids per polymer
+                            for sensor_label in lda_p_out["Sensor"].unique():
+                                sub = lda_p_out[lda_p_out["Sensor"] == sensor_label]
+                                cx, cy = sub["LD1"].mean(), sub["LD2"].mean()
+                                fig_lda_p.add_trace(plotly_go.Scatter(
+                                    x=[cx], y=[cy], mode="markers+text",
+                                    marker=dict(symbol="x", size=16, color="black", line=dict(width=2)),
+                                    text=[f"⊕ {sensor_label}"], textposition="bottom center",
+                                    textfont=dict(size=11, color="black"),
+                                    showlegend=False, name=f"Centroid: {sensor_label}"
+                                ))
+
+                            custom_plotly_chart(fig_lda_p, use_container_width=True, theme=None, config=PLOT_CONFIG)
+
+                            st.markdown("---")
+                            c_lda_p1, c_lda_p2 = st.columns([2, 1])
+                            with c_lda_p1:
+                                st.write("**LDA Projection Matrix:**")
+                                st.dataframe(lda_p_out, use_container_width=True)
+                                st.download_button("📥 Export LDA-Polymer Matrix", data=convert_df(lda_p_out), file_name="lda_polymer.csv", mime="text/csv")
+                            with c_lda_p2:
+                                st.write("**Explained Discrimination:**")
+                                for i, ev in enumerate(expl_var_p):
+                                    st.write(f"- LD{i+1} captures **{ev:.2f}%**")
+                                st.write(f"- Total: **{sum(expl_var_p):.2f}%**")
+                                st.markdown("---")
+                                st.write("**Feature Importance (LD1 Coefficients):**")
+                                coef_df_p = pd.DataFrame({"Concentration": conc_feature_cols, "LD1 Coeff": lda_p.coef_[0]})
+                                if lda_p.coef_.shape[0] > 1:
+                                    coef_df_p["LD2 Coeff"] = lda_p.coef_[1]
+                                coef_df_p = coef_df_p.sort_values("LD1 Coeff", key=abs, ascending=False)
+                                st.dataframe(coef_df_p, use_container_width=True)
+                                st.download_button("📥 Export Coefficients", data=convert_df(coef_df_p), file_name="lda_polymer_coeff.csv", mime="text/csv")
+                        except Exception as e:
+                            st.error(f"LDA (Polymer) failed: {e}")
