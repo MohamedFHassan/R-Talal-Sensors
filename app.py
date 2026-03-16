@@ -1192,6 +1192,131 @@ if st.session_state.raw_data is not None:
                     st.dataframe(loadings, use_container_width=True)
                     st.download_button("📥 Export Matrix Loadings", data=convert_df(loadings), file_name="pca_loadings.csv", mime="text/csv")
 
+                # ── 3D PCA: PC1 × PC2 × Concentration ──────────────────────────
+                st.markdown("---")
+                st.subheader("3D PCA — Concentration Trajectory Map")
+                st.info("Each analyte forms a **trajectory** through 3D space as concentration increases. Well-separated trajectories confirm the sensor array can distinguish gases across all tested concentrations.")
+
+                # Re-fit with 3 components (or max available) on same filtered data
+                n3 = min(3, len(features), len(pca_clean) - 1)
+                if n3 < 2:
+                    st.warning("Not enough dimensions for a 3D plot with this dataset.")
+                else:
+                    pca3 = PCA(n_components=n3)
+                    comp3 = pca3.fit_transform(X_scaled)
+                    vr3 = pca3.explained_variance_ratio_ * 100
+
+                    pca3_df = pca_clean[["Analyte", "Conc"]].copy().reset_index(drop=True)
+                    pca3_df["PC1"] = comp3[:, 0]
+                    pca3_df["PC2"] = comp3[:, 1]
+                    pca3_df["PC3"] = comp3[:, 2] if n3 >= 3 else 0.0
+                    pca3_df = pca3_df.sort_values(["Analyte", "Conc"])
+
+                    pc3_label = f"PC3 ({vr3[2]:.1f}%)" if n3 >= 3 else "PC3 (0.0%)"
+
+                    # Professional colour palette — one distinct colour per analyte
+                    palette = [
+                        "#2563EB", "#DC2626", "#16A34A", "#D97706", "#7C3AED",
+                        "#0891B2", "#BE185D", "#65A30D", "#EA580C", "#6366F1"
+                    ]
+                    analytes_sorted = sorted(pca3_df["Analyte"].unique())
+
+                    fig3d = plotly_go.Figure()
+
+                    for i, analyte in enumerate(analytes_sorted):
+                        color = palette[i % len(palette)]
+                        sub = pca3_df[pca3_df["Analyte"] == analyte].sort_values("Conc")
+
+                        # Trajectory line
+                        fig3d.add_trace(plotly_go.Scatter3d(
+                            x=sub["PC1"], y=sub["PC2"], z=sub["PC3"],
+                            mode="lines",
+                            line=dict(color=color, width=5),
+                            name=analyte,
+                            legendgroup=analyte,
+                            showlegend=False
+                        ))
+
+                        # Scatter dots sized and labelled by concentration
+                        fig3d.add_trace(plotly_go.Scatter3d(
+                            x=sub["PC1"], y=sub["PC2"], z=sub["PC3"],
+                            mode="markers+text",
+                            marker=dict(
+                                size=7,
+                                color=sub["Conc"],
+                                colorscale=[[0, "#ffffff"], [1, color]],
+                                cmin=float(sub["Conc"].min()),
+                                cmax=float(sub["Conc"].max()),
+                                line=dict(color=color, width=1),
+                                opacity=0.92
+                            ),
+                            text=[f"{int(c)} ppm" for c in sub["Conc"]],
+                            textposition="top center",
+                            textfont=dict(size=9, color=color),
+                            name=analyte,
+                            legendgroup=analyte,
+                            showlegend=True
+                        ))
+
+                        # Arrow cone at the highest-concentration end of each trajectory
+                        if len(sub) >= 2:
+                            tip = sub.iloc[-1]
+                            prev = sub.iloc[-2]
+                            u = tip["PC1"] - prev["PC1"]
+                            v = tip["PC2"] - prev["PC2"]
+                            w = tip["PC3"] - prev["PC3"]
+                            norm = (u**2 + v**2 + w**2) ** 0.5
+                            if norm > 1e-9:
+                                scale = 0.25
+                                fig3d.add_trace(plotly_go.Cone(
+                                    x=[tip["PC1"]], y=[tip["PC2"]], z=[tip["PC3"]],
+                                    u=[u / norm * scale], v=[v / norm * scale], w=[w / norm * scale],
+                                    colorscale=[[0, color], [1, color]],
+                                    showscale=False,
+                                    sizemode="absolute", sizeref=0.18,
+                                    anchor="tip",
+                                    legendgroup=analyte,
+                                    showlegend=False,
+                                    name=f"{analyte} direction"
+                                ))
+
+                    fig3d.update_layout(
+                        title=dict(
+                            text="3D PCA — Sensor Array Concentration Trajectory",
+                            font=dict(size=18), x=0.5, xanchor="center"
+                        ),
+                        scene=dict(
+                            xaxis=dict(title=f"PC1 ({vr3[0]:.1f}%)", backgroundcolor="rgba(240,244,255,0.6)",
+                                       gridcolor="#c7d2fe", showbackground=True, tickfont=dict(size=11)),
+                            yaxis=dict(title=f"PC2 ({vr3[1]:.1f}%)", backgroundcolor="rgba(240,255,244,0.6)",
+                                       gridcolor="#bbf7d0", showbackground=True, tickfont=dict(size=11)),
+                            zaxis=dict(title=pc3_label, backgroundcolor="rgba(255,244,240,0.6)",
+                                       gridcolor="#fed7aa", showbackground=True, tickfont=dict(size=11)),
+                            bgcolor="rgba(248,250,252,1)",
+                            camera=dict(eye=dict(x=1.6, y=1.6, z=0.9))
+                        ),
+                        legend=dict(
+                            title="Analyte", font=dict(size=12),
+                            bgcolor="rgba(255,255,255,0.85)",
+                            bordercolor="#e2e8f0", borderwidth=1
+                        ),
+                        margin=dict(l=0, r=0, t=60, b=0),
+                        height=620,
+                    )
+                    custom_plotly_chart(fig3d, use_container_width=True, theme=None, config=PLOT_CONFIG)
+
+                    # Variance summary below chart
+                    c3v1, c3v2, c3v3 = st.columns(3)
+                    c3v1.metric("PC1 Variance", f"{vr3[0]:.2f}%")
+                    c3v2.metric("PC2 Variance", f"{vr3[1]:.2f}%")
+                    c3v3.metric("PC3 Variance", f"{vr3[2]:.2f}%" if n3 >= 3 else "N/A")
+
+                    st.download_button(
+                        "📥 Export 3D PCA Data",
+                        data=convert_df(pca3_df),
+                        file_name="pca_3d.csv", mime="text/csv"
+                    )
+
     # ---------------- TAB 7: LDA ANALYSIS ----------------
     with tab_lda:
         st.header("Step 7: Linear Discriminant Analysis (LDA)")
