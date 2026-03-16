@@ -813,12 +813,14 @@ if st.session_state.raw_data is not None:
         intervals = st.session_state.intervals_dict[dict_key]
         
         # Auto-filter temp peaks when sensor selection changes to only show peaks for current sensors + analyte
-        if st.session_state.last_sensor_key != dict_key:
+        current_context = f"{analyte_name}_{dict_key}"
+        if st.session_state.last_sensor_key != current_context:
             st.session_state.temp_peaks = [
                 p for p in st.session_state.temp_peaks
                 if p.get("Sensor") in selected_sensors and str(p.get("Analyte", "")) == analyte_name
             ]
-            st.session_state.last_sensor_key = dict_key
+            st.session_state.last_sensor_key = current_context
+            st.session_state["new_conc_val"] = 20
         
         with col_pf1:
             st.subheader("Peak Analytics Criteria")
