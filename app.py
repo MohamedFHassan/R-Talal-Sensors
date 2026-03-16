@@ -905,6 +905,7 @@ if st.session_state.raw_data is not None:
             with cc3:
                 if st.button("➕ Add Region Box", use_container_width=True):
                     st.session_state.intervals_dict[dict_key].append({"Conc": new_conc, "Start": block_slider[0], "End": block_slider[1]})
+                    st.session_state["new_conc"] = new_conc + 10
                     clear_temp(); st.rerun()
 
             st.write("Current Mathematical Exposure Regions:")
