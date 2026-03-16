@@ -526,8 +526,15 @@ if st.session_state.raw_data is not None:
                         "apply_detrend": bool(row.get("Apply_Detrend", True)),
                         "norm": norm_val
                     }
-            # 5. Pre-populate temp_peaks for the current view from restored DB (so peak chart re-renders)
-            st.session_state.temp_peaks = imported_db.to_dict('records')
+            # 5. Pre-populate temp_peaks for the current view from restored DB — filtered to current analyte+sensors only
+            current_analyte_now = st.session_state.get("current_analyte", "")
+            if current_analyte_now:
+                st.session_state.temp_peaks = [
+                    r for r in imported_db.to_dict('records')
+                    if str(r.get("Analyte", "")) == current_analyte_now
+                ]
+            else:
+                st.session_state.temp_peaks = []
             st.sidebar.success(f"✅ Restored {len(imported_db)} peaks + intervals + MA + detrend settings!")
         except Exception as e:
             st.sidebar.error(f"Import failed: {e}")
@@ -799,9 +806,12 @@ if st.session_state.raw_data is not None:
             st.session_state.intervals_dict[dict_key] = []
         intervals = st.session_state.intervals_dict[dict_key]
         
-        # Auto-clear temp peaks when sensor selection changes
+        # Auto-filter temp peaks when sensor selection changes to only show peaks for current sensors + analyte
         if st.session_state.last_sensor_key != dict_key:
-            st.session_state.temp_peaks = []
+            st.session_state.temp_peaks = [
+                p for p in st.session_state.temp_peaks
+                if p.get("Sensor") in selected_sensors and str(p.get("Analyte", "")) == analyte_name
+            ]
             st.session_state.last_sensor_key = dict_key
         
         with col_pf1:
