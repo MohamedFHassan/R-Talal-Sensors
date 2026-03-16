@@ -900,12 +900,12 @@ if st.session_state.raw_data is not None:
                 pass
 
             cc1, cc2, cc3 = st.columns([1.5, 3, 1.5])
-            with cc1: new_conc = st.number_input("Target Conc (ppm)", value=20, step=10, key="new_conc")
+            with cc1: new_conc = st.number_input("Target Conc (ppm)", value=int(st.session_state.get("new_conc_val", 20)), step=10, key="new_conc")
             with cc2: block_slider = st.slider("Select Region Limits", min_value=s_min, max_value=s_max, value=(s_min_val, s_max_val), step=1.0, label_visibility="collapsed")
             with cc3:
                 if st.button("➕ Add Region Box", use_container_width=True):
                     st.session_state.intervals_dict[dict_key].append({"Conc": new_conc, "Start": block_slider[0], "End": block_slider[1]})
-                    st.session_state["new_conc"] = new_conc + 10
+                    st.session_state["new_conc_val"] = new_conc + 10
                     clear_temp(); st.rerun()
 
             st.write("Current Mathematical Exposure Regions:")
