@@ -509,7 +509,8 @@ if st.session_state.raw_data is not None:
             if "MA Settings" in xl.sheet_names:
                 ma_df = pd.read_excel(xl, sheet_name="MA Settings")
                 for _, row in ma_df.iterrows():
-                    analyte_prefix = str(row.get("Analyte", analyte_name)) if st.session_state.raw_data is not None else str(row.get("Analyte", ""))
+                    _current_analyte = st.session_state.get("current_analyte", "")
+                    analyte_prefix = str(row.get("Analyte", _current_analyte))
                     st.session_state.settings_ma[f"{analyte_prefix}::{row['Sensor']}"] = {"apply": bool(row["Apply"]), "window": int(row["Window"])}
             # 4. Pre-populate temp_peaks for the current view from restored DB (so peak chart re-renders)
             st.session_state.temp_peaks = imported_db.to_dict('records')
@@ -540,14 +541,7 @@ if st.session_state.raw_data is not None:
     
     time_data_full = df[time_col].values - df[time_col].min()
     
-    # --- TEMPORARY DIAGNOSTIC VIEWER ---
-    with st.sidebar.expander("Cloud Diagnostic Tool", expanded=True):
-        st.write("DF Shape:", df.shape)
-        st.write("Time Col:", time_col)
-        st.write("First Sensor (PVA+CA):", df["PVA+CA"].dropna().values[0] if "PVA+CA" in df and len(df["PVA+CA"].dropna())>0 else "Empty")
-        st.write("NaNs in Time:", df[time_col].isna().sum())
-        st.write("NaNs in PVA+CA:", df["PVA+CA"].isna().sum() if "PVA+CA" in df else "N/A")
-    # -----------------------------------
+
     
     def format_sensor(name):
         idx = POLYMER_MAPPING.get(name, "")
@@ -613,10 +607,11 @@ if st.session_state.raw_data is not None:
             
         c_r1, c_r2 = st.columns([1,3])
         with c_r1:
-            div_by_003 = st.checkbox("⚙️ Apply Voltage -> Resistance (/ 0.003 A)", value=True)
+            div_by_003 = st.checkbox("⚙️ Apply Voltage -> Resistance", value=True)
+            applied_current = st.number_input("Current (A)", min_value=1e-6, max_value=1.0, value=0.003, step=0.001, format="%.6f", disabled=not div_by_003)
             
         for s in selected_sensors:
-            pipeline_res[s] = pipeline_raw[s] / 0.003 if div_by_003 else pipeline_raw[s].copy()
+            pipeline_res[s] = pipeline_raw[s] / applied_current if div_by_003 else pipeline_raw[s].copy()
             
         with c_r2:
             st.markdown("**Processed Resistance (After)**")
@@ -728,7 +723,6 @@ if st.session_state.raw_data is not None:
         with c_d1:
             apply_detrend = st.checkbox("🧹 Apply Linear Detrending", value=True)
             norm_sel = st.selectbox("⚖️ Normalization Pattern", ["None", "Baseline ((x-x0)/x0)", "Shift (x-x0)", "StandardScaler", "MinMaxScaler", "RobustScaler"], index=1)
-            show_ghosts = st.checkbox("👁️ Overlay Pre-Normalized Signals", value=False, help="Normalization radically alters the Y-Axis scale. Turning this on will zoom out significantly to fit both, flattening the visual of the final signal.")
             
         for s in selected_sensors:
             y_det = detrend_sensor(pipeline_ma[s], apply_detrend=apply_detrend)
