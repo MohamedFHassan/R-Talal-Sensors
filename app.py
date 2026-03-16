@@ -338,6 +338,22 @@ def calculate_peak_heights_from_baseline(x, y, prominence=None, width=None):
         left_bases, right_bases = [], []
     return pd.DataFrame({"Time": peak_times, "Height": peak_heights}), left_bases, right_bases
 
+P0_DICT = {
+    "water": 23.8,
+    "toluene": 28.4,
+    "ethanol": 58.7,
+    "chloroform": 195.0,
+    "acetone": 231.0
+}
+
+def get_true_ppm(analyte, conc_val):
+    if pd.isna(conc_val): return np.nan
+    a_lower = str(analyte).strip().lower()
+    p0 = P0_DICT.get(a_lower)
+    if p0 is not None:
+        return (float(conc_val) / 100.0 * p0 / 760.0) * 1e6
+    return float(conc_val)
+
 def detect_single_sensor_peaks(x, y, analyte, sensor_name, intervals, prominence_value, width_value, is_valley):
     peak_storage = []
     x, y = np.asarray(x), np.asarray(y)
@@ -381,6 +397,7 @@ def detect_single_sensor_peaks(x, y, analyte, sensor_name, intervals, prominence
             "Sensor": sensor_name,
             "Polymer Index": p_index,
             "Conc": int(conc) if pd.notna(conc) else None,
+            "True PPM": get_true_ppm(analyte, conc),
             "Signal": signal_value,
             "Response Time (s)": response_time,
             "Recovery Time (s)": recovery_time,
@@ -400,9 +417,11 @@ def regression_analysis_grouped(data):
     if "Polymer Index" in data.columns and not data["Polymer Index"].isna().all():
         data = data.sort_values(by="Polymer Index")
         
+    x_col = "True PPM" if "True PPM" in data.columns else "Conc"
+        
     for (analyte, sensor, p_idx), group in data.groupby(["Analyte", "Sensor", "Polymer Index"]):
         if len(group) < 2: continue
-        X_full = sm.add_constant(group["Conc"])
+        X_full = sm.add_constant(group[x_col])
         y_full = group["Signal"]
         model_full = sm.OLS(y_full, X_full).fit()
         baseline_r2 = model_full.rsquared
@@ -420,9 +439,9 @@ def regression_analysis_grouped(data):
             'Analyte': analyte, 'Sensor': sensor, 'Polymer Index': p_idx,
             'R2': baseline_r2,
             'Std_Error': np.std(model_full.resid, ddof=1) if len(model_full.resid) > 1 else np.nan,
-            'Slope': model_full.params.get("Conc", np.nan),
+            'Slope (Signal/ppm)': model_full.params.get(x_col, np.nan),
             'Intercept': model_full.params.get('const', np.nan),
-            'LOD (ppm)': 3 * np.std(model_full.resid, ddof=1) / model_full.params.get("Conc", np.nan) if len(model_full.resid) > 1 and model_full.params.get("Conc", np.nan) != 0 else np.nan,
+            'LOD (ppm)': 3 * np.std(model_full.resid, ddof=1) / model_full.params.get(x_col, np.nan) if len(model_full.resid) > 1 and model_full.params.get(x_col, np.nan) != 0 else np.nan,
             'Avg Response Time (s)': group['Response Time (s)'].mean() if 'Response Time (s)' in group else np.nan,
             'Avg Recovery Time (s)': group['Recovery Time (s)'].mean() if 'Recovery Time (s)' in group else np.nan,
             'Reproducibility RSD (%)': (np.std(model_full.resid, ddof=1) / group['Signal'].mean() * 100) if group['Signal'].mean() != 0 and len(model_full.resid) > 1 else np.nan
@@ -798,7 +817,7 @@ if st.session_state.raw_data is not None:
             
             **How to do it:** 
             1. Drag your mouse inside the graph below to vividly highlight the timeframe where the chemical was exposed. Click **➕ Add Region Box**.
-            2. Set the exact **Target Conc (ppm)** associated with that exposure.
+            2. Set the exact **Target Conc (P/P0 % or ppm)** associated with that exposure.
             3. Click the red **🔎 Detect Peaks** button. 
             
             The Deep Engine will mathematically iterate through every active sensor inside that timeframe. It will dynamically search for a peak (red dot), simulate what a "quiet" baseline beneath it should look like (dotted line), and extract the exact **Response Time** (time to reach peak maximum) and **Recovery Time** (time to fall back to equilibrium).
@@ -939,7 +958,7 @@ if st.session_state.raw_data is not None:
             if "new_conc_val" not in st.session_state:
                 st.session_state["new_conc_val"] = 20
             cc1, cc2, cc3 = st.columns([1.5, 3, 1.5])
-            with cc1: new_conc = st.number_input("Target Conc (ppm)", value=st.session_state["new_conc_val"], step=10)
+            with cc1: new_conc = st.number_input("Target Conc (P/P0 % or ppm)", value=st.session_state["new_conc_val"], step=10)
             with cc2: block_slider = st.slider("Select Region Limits", min_value=s_min, max_value=s_max, value=(s_min_val, s_max_val), step=1.0, label_visibility="collapsed")
             with cc3:
                 if st.button("➕ Add Region Box", use_container_width=True):
@@ -975,10 +994,14 @@ if st.session_state.raw_data is not None:
             st.write("**Live Local Regression Preview:**")
             try:
                 preview_df_ols = pd.DataFrame(st.session_state.temp_peaks)
-                fig_preview_reg = px.scatter(preview_df_ols, x="Conc", y="Signal", color="Sensor", trendline="ols",
-                                             title="Real-Time Sensitivity Trend Lines (Unsaved)")
-                fig_preview_reg.update_layout(xaxis_title="Concentration Exposure (ppm)", yaxis_title="Mathematical Signal (Peak - Baseline)", height=400)
-                # Annotate with equation and R²
+                if "True PPM" not in preview_df_ols.columns:
+                    preview_df_ols["True PPM"] = preview_df_ols.apply(lambda r: get_true_ppm(r["Analyte"], r["Conc"]), axis=1)
+                
+                fig_preview_reg = px.scatter(preview_df_ols, x="True PPM", y="Signal", color="Sensor", trendline="ols",
+                                            title="Live Signal vs True Concentration (ppm)")
+                fig_preview_reg.update_layout(xaxis_title="True Concentration (ppm)", yaxis_title="Mathematical Signal")
+                
+                # Annotate with OLS equation
                 try:
                     ols_results = px.get_trendline_results(fig_preview_reg)
                     annotations = []
@@ -990,7 +1013,7 @@ if st.session_state.raw_data is not None:
                         sensor_label = row.get("Sensor", f"Sensor {i+1}")
                         annotations.append(dict(
                             xref="paper", yref="paper", x=0.01, y=0.97 - i * 0.08,
-                            text=f"<b>{sensor_label}:</b> y = {slope:.4f}x + {intercept:.4f} | R² = {r2:.4f}",
+                            text=f"<b>{sensor_label}:</b> y = {slope:.4g}x + {intercept:.4f} | R² = {r2:.4f}",
                             showarrow=False, font=dict(size=11), align="left"
                         ))
                     fig_preview_reg.update_layout(annotations=annotations)
@@ -1022,10 +1045,13 @@ if st.session_state.raw_data is not None:
             
             if not db_sel.empty:
                 st.subheader("Interactive Local Sensitivities (Selected Pool)")
+                # Backwards compatibility for older sessions
+                if "True PPM" not in db_sel.columns:
+                    db_sel["True PPM"] = db_sel.apply(lambda r: get_true_ppm(r["Analyte"], r["Conc"]), axis=1)
                 try: 
-                    fig_reg = px.scatter(db_sel, x="Conc", y="Signal", color="Sensor", trendline="ols", 
+                    fig_reg = px.scatter(db_sel, x="True PPM", y="Signal", color="Sensor", trendline="ols", 
                                         title=f"Scatter Trend Lines ({len(selected_sensors)} Local Active Sensors)")
-                    fig_reg.update_layout(xaxis_title="Concentration Exposure (ppm)", yaxis_title="Mathematical Signal (Peak - Baseline)")
+                    fig_reg.update_layout(xaxis_title="True Concentration (ppm)", yaxis_title="Mathematical Signal (Peak - Baseline)")
                     # Annotate with equation and R²
                     try:
                         ols_db_results = px.get_trendline_results(fig_reg)
@@ -1038,7 +1064,7 @@ if st.session_state.raw_data is not None:
                             sensor_label = row.get("Sensor", f"Sensor {i+1}")
                             db_annotations.append(dict(
                                 xref="paper", yref="paper", x=0.01, y=0.97 - i * 0.08,
-                                text=f"<b>{sensor_label}:</b> y = {slope:.4f}x + {intercept:.4f} | R² = {r2:.4f}",
+                                text=f"<b>{sensor_label}:</b> y = {slope:.4g}x + {intercept:.4f} | R² = {r2:.4f}",
                                 showarrow=False, font=dict(size=11), align="left"
                             ))
                         fig_reg.update_layout(annotations=db_annotations)
@@ -1144,8 +1170,12 @@ if st.session_state.raw_data is not None:
             else:
                 pca_df = db[(db["Sensor"].isin(pca_sensors)) & (db["Conc"].isin(pca_concs))].copy()
                 
+                # Ensure True PPM is available
+                if "True PPM" not in pca_df.columns:
+                    pca_df["True PPM"] = pca_df.apply(lambda r: get_true_ppm(r["Analyte"], r["Conc"]), axis=1)
+
                 # Pivot data: Rows = Analyte + Concentration, Columns = Sensors, Values = Peak Signal
-                pca_pivot = pca_df.pivot_table(index=["Analyte", "Conc"], columns="Sensor", values="Signal", aggfunc="mean").reset_index()
+                pca_pivot = pca_df.pivot_table(index=["Analyte", "Conc", "True PPM"], columns="Sensor", values="Signal", aggfunc="mean").reset_index()
                 
                 # Handle Non-Response Overlaps
                 pca_clean = pca_pivot.dropna() if drop_na_toggle else pca_pivot.fillna(0)
@@ -1213,7 +1243,7 @@ if st.session_state.raw_data is not None:
                     comp3 = pca3.fit_transform(X_scaled)
                     vr3 = pca3.explained_variance_ratio_ * 100
 
-                    pca3_df = pca_clean[["Analyte", "Conc"]].copy().reset_index(drop=True)
+                    pca3_df = pca_clean[["Analyte", "Conc", "True PPM"] if "True PPM" in pca_clean.columns else ["Analyte", "Conc"]].copy().reset_index(drop=True)
                     pca3_df["PC1"] = comp3[:, 0]
                     pca3_df["PC2"] = comp3[:, 1]
                     pca3_df["PC3"] = comp3[:, 2] if n3 >= 3 else 0.0
@@ -1233,6 +1263,8 @@ if st.session_state.raw_data is not None:
                     for i, analyte in enumerate(analytes_sorted):
                         color = palette[i % len(palette)]
                         sub = pca3_df[pca3_df["Analyte"] == analyte].sort_values("Conc")
+                        
+                        conc_col = "True PPM" if "True PPM" in sub.columns else "Conc"
 
                         # Trajectory line
                         fig3d.add_trace(plotly_go.Scatter3d(
@@ -1250,14 +1282,14 @@ if st.session_state.raw_data is not None:
                             mode="markers+text",
                             marker=dict(
                                 size=7,
-                                color=sub["Conc"],
+                                color=sub[conc_col],
                                 colorscale=[[0, "#ffffff"], [1, color]],
-                                cmin=float(sub["Conc"].min()),
-                                cmax=float(sub["Conc"].max()),
+                                cmin=float(sub[conc_col].min()),
+                                cmax=float(sub[conc_col].max()),
                                 line=dict(color=color, width=1),
                                 opacity=0.92
                             ),
-                            text=[f"{int(c)} ppm" for c in sub["Conc"]],
+                            text=[f"{int(c)} ppm" if c > 1000 else f"{c} P/P0%" for c in sub[conc_col]],
                             textposition="top center",
                             textfont=dict(size=9, color=color),
                             name=analyte,
