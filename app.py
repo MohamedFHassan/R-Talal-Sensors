@@ -297,17 +297,18 @@ POLYMER_MAPPING = {
 # --- Core Logic Functions ---
 def preprocess_sensor(y, window_size=10, apply_smoothing=True):
     if not apply_smoothing or window_size < 1:
-        return y.copy()
-    y_smooth = pd.Series(y).rolling(window=window_size, center=True).mean()
-    y_smooth.bfill(inplace=True)
-    y_smooth.ffill(inplace=True)
+        return np.array(y)
+    y_smooth = pd.Series(y).rolling(window=window_size, center=True, min_periods=1).mean()
+    y_smooth = y_smooth.bfill().ffill()
     return y_smooth.values
 
 def detrend_sensor(y, apply_detrend=True):
     if not apply_detrend:
-        return y.copy()
-    y_no_inf = pd.Series(y).replace([np.inf, -np.inf], np.nan).ffill().bfill().values
-    return detrend(y_no_inf, type='linear')
+        return np.array(y)
+    y_no_inf = pd.Series(y).replace([np.inf, -np.inf], np.nan).ffill().bfill()
+    if y_no_inf.isna().any():
+        y_no_inf = y_no_inf.fillna(0)
+    return detrend(y_no_inf.values, type='linear')
 
 def normalize_sensor(y, norm="Baseline ((x-x0)/x0)"):
     if norm == "None":
