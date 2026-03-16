@@ -1187,7 +1187,7 @@ if st.session_state.raw_data is not None:
                     st.write(f"- PC2 captures **{var_ratio[1]:.2f}%** of total variance")
                     st.write(f"- Total: **{(var_ratio[0] + var_ratio[1]):.2f}%**")
                     
-                     st.write("**Component Matrix Loadings:**")
+                    st.write("**Component Matrix Loadings:**")
                     loadings = pd.DataFrame(pca.components_.T, columns=['PC1', 'PC2'], index=features)
                     st.dataframe(loadings, use_container_width=True)
                     st.download_button("📥 Export Matrix Loadings", data=convert_df(loadings), file_name="pca_loadings.csv", mime="text/csv")
