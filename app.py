@@ -263,6 +263,7 @@ if "file_id" not in st.session_state: st.session_state.file_id = None
 if "raw_data" not in st.session_state: st.session_state.raw_data = None
 if "master_peaks" not in st.session_state: st.session_state.master_peaks = pd.DataFrame()
 if "settings_ma" not in st.session_state: st.session_state.settings_ma = {}
+if "settings_detrend" not in st.session_state: st.session_state.settings_detrend = {}
 if "intervals_dict" not in st.session_state: st.session_state.intervals_dict = {}
 if "temp_peaks" not in st.session_state: st.session_state.temp_peaks = []
 if "current_analyte" not in st.session_state: st.session_state.current_analyte = None
@@ -512,9 +513,22 @@ if st.session_state.raw_data is not None:
                     _current_analyte = st.session_state.get("current_analyte", "")
                     analyte_prefix = str(row.get("Analyte", _current_analyte))
                     st.session_state.settings_ma[f"{analyte_prefix}::{row['Sensor']}"] = {"apply": bool(row["Apply"]), "window": int(row["Window"])}
-            # 4. Pre-populate temp_peaks for the current view from restored DB (so peak chart re-renders)
+            # 4. Restore detrend/norm settings per analyte
+            if "Detrend Settings" in xl.sheet_names:
+                det_df = pd.read_excel(xl, sheet_name="Detrend Settings")
+                norm_options = ["None", "Baseline ((x-x0)/x0)", "Shift (x-x0)", "StandardScaler", "MinMaxScaler", "RobustScaler"]
+                for _, row in det_df.iterrows():
+                    analyte_val = str(row.get("Analyte", ""))
+                    norm_val = str(row.get("Norm", "Baseline ((x-x0)/x0)"))
+                    if norm_val not in norm_options:
+                        norm_val = "Baseline ((x-x0)/x0)"
+                    st.session_state.settings_detrend[f"detrend::{analyte_val}"] = {
+                        "apply_detrend": bool(row.get("Apply_Detrend", True)),
+                        "norm": norm_val
+                    }
+            # 5. Pre-populate temp_peaks for the current view from restored DB (so peak chart re-renders)
             st.session_state.temp_peaks = imported_db.to_dict('records')
-            st.sidebar.success(f"✅ Restored {len(imported_db)} peaks + intervals + MA settings!")
+            st.sidebar.success(f"✅ Restored {len(imported_db)} peaks + intervals + MA + detrend settings!")
         except Exception as e:
             st.sidebar.error(f"Import failed: {e}")
 
@@ -524,6 +538,7 @@ if st.session_state.raw_data is not None:
 
     # Namespace helper: MA settings are per-analyte so different sheets don't bleed into each other
     def ma_key(sensor): return f"{analyte_name}::{sensor}"
+    def detrend_key(): return f"detrend::{analyte_name}"
     
     # Ensure complete numeric safety for Plotly JS, mitigating European comma strings 
     for col in df.columns:
@@ -721,8 +736,12 @@ if st.session_state.raw_data is not None:
             
         c_d1, c_d2 = st.columns([1,3])
         with c_d1:
-            apply_detrend = st.checkbox("🧹 Apply Linear Detrending", value=True)
-            norm_sel = st.selectbox("⚖️ Normalization Pattern", ["None", "Baseline ((x-x0)/x0)", "Shift (x-x0)", "StandardScaler", "MinMaxScaler", "RobustScaler"], index=1)
+            _det_defaults = st.session_state.settings_detrend.get(detrend_key(), {"apply_detrend": True, "norm": "Baseline ((x-x0)/x0)"})
+            apply_detrend = st.checkbox("🧹 Apply Linear Detrending", value=_det_defaults["apply_detrend"])
+            norm_sel = st.selectbox("⚖️ Normalization Pattern", ["None", "Baseline ((x-x0)/x0)", "Shift (x-x0)", "StandardScaler", "MinMaxScaler", "RobustScaler"],
+                                    index=["None", "Baseline ((x-x0)/x0)", "Shift (x-x0)", "StandardScaler", "MinMaxScaler", "RobustScaler"].index(_det_defaults["norm"]))
+            # Auto-save on every render so changes persist across reruns
+            st.session_state.settings_detrend[detrend_key()] = {"apply_detrend": apply_detrend, "norm": norm_sel}
             
         for s in selected_sensors:
             y_det = detrend_sensor(pipeline_ma[s], apply_detrend=apply_detrend)
@@ -899,13 +918,15 @@ if st.session_state.raw_data is not None:
             except Exception:
                 pass
 
+            if "new_conc_val" not in st.session_state:
+                st.session_state["new_conc_val"] = 20
             cc1, cc2, cc3 = st.columns([1.5, 3, 1.5])
-            with cc1: new_conc = st.number_input("Target Conc (ppm)", value=int(st.session_state.get("new_conc_val", 20)), step=10, key="new_conc")
+            with cc1: new_conc = st.number_input("Target Conc (ppm)", value=st.session_state["new_conc_val"], step=10)
             with cc2: block_slider = st.slider("Select Region Limits", min_value=s_min, max_value=s_max, value=(s_min_val, s_max_val), step=1.0, label_visibility="collapsed")
             with cc3:
                 if st.button("➕ Add Region Box", use_container_width=True):
                     st.session_state.intervals_dict[dict_key].append({"Conc": new_conc, "Start": block_slider[0], "End": block_slider[1]})
-                    st.session_state["new_conc_val"] = new_conc + 10
+                    st.session_state["new_conc_val"] = int(new_conc) + 10
                     clear_temp(); st.rerun()
 
             st.write("Current Mathematical Exposure Regions:")
@@ -1027,6 +1048,10 @@ if st.session_state.raw_data is not None:
                     ma_rows = [{"Analyte": analyte_name, "Sensor": s.split("::",1)[-1], "Apply": v["apply"], "Window": v["window"]} 
                                for s, v in st.session_state.settings_ma.items() if s.startswith(f"{analyte_name}::")]
                     if ma_rows: pd.DataFrame(ma_rows).to_excel(writer, sheet_name='MA Settings', index=False)
+                    # Save detrend/norm settings
+                    det_rows = [{"Analyte": k.split("::",1)[-1], "Apply_Detrend": v["apply_detrend"], "Norm": v["norm"]}
+                                for k, v in st.session_state.settings_detrend.items()]
+                    if det_rows: pd.DataFrame(det_rows).to_excel(writer, sheet_name='Detrend Settings', index=False)
                 st.download_button(
                     label="📤 Export Full Session",
                     data=export_buf.getvalue(),
