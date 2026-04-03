@@ -551,15 +551,9 @@ if st.session_state.raw_data is not None:
                         "apply_detrend": bool(row.get("Apply_Detrend", True)),
                         "norm": norm_val
                     }
-            # 5. Pre-populate temp_peaks for the current view from restored DB — filtered to current analyte+sensors only
-            current_analyte_now = st.session_state.get("current_analyte", "")
-            if current_analyte_now:
-                st.session_state.temp_peaks = [
-                    r for r in imported_db.to_dict('records')
-                    if str(r.get("Analyte", "")) == current_analyte_now
-                ]
-            else:
-                st.session_state.temp_peaks = []
+            # 5. Don't dump peaks into temp_peaks — master_peaks already holds them.
+            #    The peak chart will read confirmed peaks from master_peaks, filtered by sensor.
+            st.session_state.temp_peaks = []
             st.sidebar.success(f"✅ Restored {len(imported_db)} peaks + intervals + MA + detrend settings!")
         except Exception as e:
             st.sidebar.error(f"Import failed: {e}")
@@ -883,8 +877,18 @@ if st.session_state.raw_data is not None:
             # Interactive Graphing Engine
             fig_p = plotly_go.Figure()
             colors = ["#2CA02C", "#FF7F0E", "#9467BD", "#8C564B", "#E377C2", "#7F7F7F", "#BCBD22", "#17BECF"]
+
+            # Collect peaks to display: use temp_peaks if freshly detected, otherwise pull confirmed peaks from master_peaks
+            display_peaks = st.session_state.temp_peaks
+            if not display_peaks and not st.session_state.master_peaks.empty:
+                db_filtered = st.session_state.master_peaks[
+                    (st.session_state.master_peaks["Sensor"].isin(selected_sensors)) &
+                    (st.session_state.master_peaks["Analyte"] == analyte_name)
+                ]
+                if not db_filtered.empty:
+                    display_peaks = db_filtered.to_dict('records')
             
-            if len(st.session_state.temp_peaks) > 0:
+            if len(display_peaks) > 0:
                 # Ghost out inactive lines outside interval blocks
                 for s in selected_sensors:
                     fig_p.add_trace(plotly_go.Scatter(x=t_plot, y=pipeline_final[s][::plot_stride], mode='lines', line=dict(color='lightgray', width=1), showlegend=False))
@@ -899,8 +903,10 @@ if st.session_state.raw_data is not None:
                     for s in selected_sensors:
                         fig_p.add_trace(plotly_go.Scatter(x=t_vals[mask], y=pipeline_final[s][mask], mode='lines', line=dict(color=c_color, width=2), name=f"{s} {inter.get('Conc')}ppm"))
 
-                # Draw intricate peak math structures
-                for p in st.session_state.temp_peaks:
+                # Draw intricate peak math structures — only for current selected sensors
+                for p in display_peaks:
+                    if p.get("Sensor") not in selected_sensors:
+                        continue
                     # Dashed Line (Base to Base)
                     fig_p.add_trace(plotly_go.Scatter(x=[p["tL"], p["tR"]], y=[p["yL"], p["yR"]], mode='lines', line=dict(color='black', dash='dash'), showlegend=False))
                     # Dotted Line (Interp Base to Peak)
