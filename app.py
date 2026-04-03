@@ -483,7 +483,43 @@ def custom_plotly_chart(fig, **kwargs):
 
 st.sidebar.markdown("---")
 st.sidebar.header("📁 1. Data Source")
-uploaded_file = st.sidebar.file_uploader("Upload Excel/CSV", type=['xlsx', 'csv'])
+uploaded_file = st.sidebar.file_uploader("Upload Excel/CSV (or Session Export)", type=['xlsx', 'csv'])
+
+# --- Helper: restore session from an Excel file with "Peak Database" sheet ---
+def _restore_session_from_excel(xl_file):
+    """Restores peaks, intervals, MA settings, and detrend settings from a session export."""
+    xl = pd.ExcelFile(xl_file)
+    imported_db = pd.read_excel(xl, sheet_name="Peak Database")
+    st.session_state.master_peaks = imported_db
+    if "Intervals" in xl.sheet_names:
+        int_df = pd.read_excel(xl, sheet_name="Intervals")
+        for _, row in int_df.iterrows():
+            key = str(row["dict_key"])
+            if key not in st.session_state.intervals_dict:
+                st.session_state.intervals_dict[key] = []
+            st.session_state.intervals_dict[key].append({"Conc": row["Conc"], "Start": row["Start"], "End": row["End"]})
+    if "MA Settings" in xl.sheet_names:
+        ma_df = pd.read_excel(xl, sheet_name="MA Settings")
+        for _, row in ma_df.iterrows():
+            _ca = st.session_state.get("current_analyte", "")
+            analyte_prefix = str(row.get("Analyte", _ca))
+            st.session_state.settings_ma[f"{analyte_prefix}::{row['Sensor']}"] = {"apply": bool(row["Apply"]), "window": int(row["Window"])}
+    if "Detrend Settings" in xl.sheet_names:
+        det_df = pd.read_excel(xl, sheet_name="Detrend Settings")
+        norm_options = ["None", "Baseline ((x-x0)/x0)", "Shift (x-x0)", "StandardScaler", "MinMaxScaler", "RobustScaler"]
+        for _, row in det_df.iterrows():
+            analyte_val = str(row.get("Analyte", ""))
+            norm_val = str(row.get("Norm", "Baseline ((x-x0)/x0)"))
+            if norm_val not in norm_options:
+                norm_val = "Baseline ((x-x0)/x0)"
+            st.session_state.settings_detrend[f"detrend::{analyte_val}"] = {
+                "apply_detrend": bool(row.get("Apply_Detrend", True)),
+                "norm": norm_val
+            }
+    st.session_state.temp_peaks = []
+    return len(imported_db)
+
+SESSION_SHEETS = {"Peak Database", "Intervals", "MA Settings", "Detrend Settings"}
 
 if uploaded_file:
     try:
@@ -491,70 +527,77 @@ if uploaded_file:
         sheet = None
         if is_excel:
             xls = pd.ExcelFile(uploaded_file)
-            sheet = st.sidebar.selectbox("Select Analyte Sheet", xls.sheet_names)
-            
-        current_file_id = f"{uploaded_file.name}_{uploaded_file.size}_{sheet}"
-        
-        if st.session_state.file_id != current_file_id:
-            with st.spinner("Loading dataset..."):
-                if is_excel:
-                    df = pd.read_excel(uploaded_file, sheet_name=sheet, header=0)
-                    st.session_state.current_analyte = sheet
+            all_sheets = xls.sheet_names
+
+            # Auto-detect: if file contains "Peak Database" sheet, it's a session export
+            is_session_file = "Peak Database" in all_sheets
+
+            if is_session_file:
+                # Filter out internal session sheets — only show actual analyte data sheets
+                data_sheets = [s for s in all_sheets if s not in SESSION_SHEETS]
+                if data_sheets:
+                    sheet = st.sidebar.selectbox("Select Analyte Sheet", data_sheets)
                 else:
+                    # Pure session file (no raw data sheets) — restore only, skip data loading
+                    try:
+                        n_restored = _restore_session_from_excel(uploaded_file)
+                        st.sidebar.success(f"✅ Session file detected! Restored {n_restored} peaks + settings.")
+                        st.sidebar.warning("⚠️ Now upload the raw data file (e.g. All data MF.xlsx) to view sensor plots.")
+                    except Exception as e:
+                        st.sidebar.error(f"Session restore failed: {e}")
+                    sheet = None  # No data sheet to load
+
+                # Auto-restore session settings from the same file
+                if sheet:
+                    try:
+                        n_restored = _restore_session_from_excel(uploaded_file)
+                        st.sidebar.success(f"✅ Auto-restored {n_restored} peaks + settings from session file!")
+                    except Exception:
+                        pass
+            else:
+                sheet = st.sidebar.selectbox("Select Analyte Sheet", all_sheets)
+
+        if sheet is not None:
+            current_file_id = f"{uploaded_file.name}_{uploaded_file.size}_{sheet}"
+            
+            if st.session_state.file_id != current_file_id:
+                with st.spinner("Loading dataset..."):
+                    if is_excel:
+                        df = pd.read_excel(uploaded_file, sheet_name=sheet, header=0)
+                        st.session_state.current_analyte = sheet
+                    else:
+                        df = pd.read_csv(uploaded_file)
+                        st.session_state.current_analyte = "Unknown"
+                    st.session_state.raw_data = df
+                    st.session_state.temp_peaks = []
+                    st.session_state.file_id = current_file_id
+                    
+            if st.session_state.raw_data is not None:
+                st.sidebar.success(f"Loaded successfully!")
+        elif not is_excel:
+            # CSV file
+            current_file_id = f"{uploaded_file.name}_{uploaded_file.size}_csv"
+            if st.session_state.file_id != current_file_id:
+                with st.spinner("Loading dataset..."):
                     df = pd.read_csv(uploaded_file)
                     st.session_state.current_analyte = "Unknown"
-                st.session_state.raw_data = df
-                st.session_state.temp_peaks = []
-                st.session_state.file_id = current_file_id
-                
-        if st.session_state.raw_data is not None:
-            st.sidebar.success(f"Loaded successfully!")
+                    st.session_state.raw_data = df
+                    st.session_state.temp_peaks = []
+                    st.session_state.file_id = current_file_id
+            if st.session_state.raw_data is not None:
+                st.sidebar.success(f"Loaded successfully!")
     except Exception as e:
         st.sidebar.error(f"Error loading file: {e}")
 
-# --- SESSION RESTORE shown only after main data is loaded to avoid dual-uploader 400 conflict ---
+# --- STANDALONE SESSION RESTORE (shown after data is loaded, for separate restore files) ---
 if st.session_state.raw_data is not None:
     st.sidebar.markdown("---")
     st.sidebar.header("💾 Restore Session")
-    db_import_file = st.sidebar.file_uploader("Import Peak Database (.xlsx)", type=['xlsx'], key="db_import")
+    db_import_file = st.sidebar.file_uploader("Import Session Export (.xlsx)", type=['xlsx'], key="db_import")
     if db_import_file:
         try:
-            xl = pd.ExcelFile(db_import_file)
-            # 1. Restore peak database
-            imported_db = pd.read_excel(xl, sheet_name="Peak Database")
-            st.session_state.master_peaks = imported_db
-            # 2. Restore concentration intervals per sensor group
-            if "Intervals" in xl.sheet_names:
-                int_df = pd.read_excel(xl, sheet_name="Intervals")
-                for _, row in int_df.iterrows():
-                    key = str(row["dict_key"])
-                    if key not in st.session_state.intervals_dict:
-                        st.session_state.intervals_dict[key] = []
-                    st.session_state.intervals_dict[key].append({"Conc": row["Conc"], "Start": row["Start"], "End": row["End"]})
-            # 3. Restore MA settings per sensor
-            if "MA Settings" in xl.sheet_names:
-                ma_df = pd.read_excel(xl, sheet_name="MA Settings")
-                for _, row in ma_df.iterrows():
-                    _current_analyte = st.session_state.get("current_analyte", "")
-                    analyte_prefix = str(row.get("Analyte", _current_analyte))
-                    st.session_state.settings_ma[f"{analyte_prefix}::{row['Sensor']}"] = {"apply": bool(row["Apply"]), "window": int(row["Window"])}
-            # 4. Restore detrend/norm settings per analyte
-            if "Detrend Settings" in xl.sheet_names:
-                det_df = pd.read_excel(xl, sheet_name="Detrend Settings")
-                norm_options = ["None", "Baseline ((x-x0)/x0)", "Shift (x-x0)", "StandardScaler", "MinMaxScaler", "RobustScaler"]
-                for _, row in det_df.iterrows():
-                    analyte_val = str(row.get("Analyte", ""))
-                    norm_val = str(row.get("Norm", "Baseline ((x-x0)/x0)"))
-                    if norm_val not in norm_options:
-                        norm_val = "Baseline ((x-x0)/x0)"
-                    st.session_state.settings_detrend[f"detrend::{analyte_val}"] = {
-                        "apply_detrend": bool(row.get("Apply_Detrend", True)),
-                        "norm": norm_val
-                    }
-            # 5. Don't dump peaks into temp_peaks — master_peaks already holds them.
-            #    The peak chart will read confirmed peaks from master_peaks, filtered by sensor.
-            st.session_state.temp_peaks = []
-            st.sidebar.success(f"✅ Restored {len(imported_db)} peaks + intervals + MA + detrend settings!")
+            n_restored = _restore_session_from_excel(db_import_file)
+            st.sidebar.success(f"✅ Restored {n_restored} peaks + intervals + MA + detrend settings!")
         except Exception as e:
             st.sidebar.error(f"Import failed: {e}")
 
